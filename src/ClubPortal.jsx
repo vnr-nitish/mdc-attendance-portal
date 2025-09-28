@@ -1,17 +1,18 @@
-import React, { useState, useEffect } from 'react';
-import { useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, deleteUser, updatePassword } from 'firebase/auth';
-import { getFirestore, collection, addDoc, onSnapshot, query, updateDoc, doc, deleteDoc, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, onSnapshot, query, where, updateDoc, doc, deleteDoc, getDocs, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 
 const App = () => {
   // State for Firebase services and user information
   const [db, setDb] = useState(null);
   const [auth, setAuth] = useState(null);
-  // Removed unused userId state
+  const [userId, setUserId] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [adminPassword, setAdminPassword] = useState('Meta@1234');
+  const profileDropdownRef = useRef(null);
+  const [remainingTime, setRemainingTime] = useState(1800);
 
 
   // State for UI navigation and Admin Panel view
@@ -24,10 +25,12 @@ const App = () => {
   const [registerForm, setRegisterForm] = useState({
     photo: null, username: '', email: '', contact: '', year: '', regNo: '', program: '', domain: '', position: '', password: ''
   });
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(''); // Global message for main screen
+  const [modalMessage, setModalMessage] = useState(''); // Message for inside modals
   const [allUsers, setAllUsers] = useState([]);
   const [editingUser, setEditingUser] = useState(null);
   const [deletingUser, setDeletingUser] = useState(null);
+  const [deletingSlot, setDeletingSlot] = useState(null);
   const [showRegistrationSuccess, setShowRegistrationSuccess] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -37,6 +40,8 @@ const App = () => {
   const [showCreateSlot, setShowCreateSlot] = useState(false);
   const [newSlotForm, setNewSlotForm] = useState({ slotType: '', slotName: '', date: '', venue: '', timings: '' });
   const [editingSlot, setEditingSlot] = useState(null);
+  const [eligibleUsers, setEligibleUsers] = useState([]);
+  const [eligibleUserSearch, setEligibleUserSearch] = useState('');
   const [markingAttendanceForSlot, setMarkingAttendanceForSlot] = useState(null);
   const [slotAttendance, setSlotAttendance] = useState([]); // Array of { userId, isPresent }
   const [attendanceSearchTerm, setAttendanceSearchTerm] = useState('');
@@ -45,6 +50,8 @@ const App = () => {
   const [slotTypeFilter, setSlotTypeFilter] = useState('all');
   const [slotMonthFilter, setSlotMonthFilter] = useState('all');
   const [slotYearFilter, setSlotYearFilter] = useState('all');
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importFile, setImportFile] = useState(null);
 
   // State for Dashboard
   const [showMemberAttendanceDetails, setShowMemberAttendanceDetails] = useState(false);
@@ -66,14 +73,14 @@ const App = () => {
 
   
   // Your web app's Firebase configuration
-  const firebaseConfig = useMemo(() => ({
-    apiKey: "AIzaSyDcXyskaSXag5vebXR0BZtoFDZW1-BW5ZQ",
-    authDomain: "mdc-attendance-portal.firebaseapp.com",
-    projectId: "mdc-attendance-portal",
-    storageBucket: "mdc-attendance-portal.firebasestorage.app",
-    messagingSenderId: "68450083483",
-    appId: "1:68450083483:web:35aa3c2da24aba1a9fdc3e"
-  }), []);
+  const firebaseConfig = {
+  apiKey: "AIzaSyDcXyskaSXag5vebXR0BZtoFDZW1-BW5ZQ",
+  authDomain: "mdc-attendance-portal.firebaseapp.com",
+  projectId: "mdc-attendance-portal",
+  storageBucket: "mdc-attendance-portal.firebasestorage.app",
+  messagingSenderId: "68450083483",
+  appId: "1:68450083483:web:35aa3c2da24aba1a9fdc3e"
+  };
 
   const appId = firebaseConfig.appId;
 
@@ -100,68 +107,170 @@ const App = () => {
     setAuth(authInstance);
     setDb(dbInstance);
     
-    // The onAuthStateChanged listener is now for tracking changes, not for initial sign-in
     const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
       if (user) {
-        // setUserId(user.uid); // Removed unused userId assignment
-        // Also fetch user profile from Firestore
+        setUserId(user.uid);
         const userDocRef = doc(dbInstance, `/artifacts/${appId}/public/data/users`, user.uid);
         const userDoc = await getDoc(userDocRef);
         if (userDoc.exists()) {
           setUserProfile({ id: user.uid, ...userDoc.data() });
         }
       } else {
-        // setUserId(null); // Removed unused userId assignment
+        setUserId(null);
         setUserProfile(null);
+        setIsAdmin(false);
       }
       setIsAuthReady(true);
     });
 
     return () => unsubscribe();
-  }, [appId, firebaseConfig]);
+  }, [appId]);
 
-  // Firestore listener for all users (Admin view)
+  // Fetch all data from Firestore after login/auth is ready
   useEffect(() => {
-    if (isAuthReady && db && isAdmin) {
-      const usersCollectionPath = `/artifacts/${appId}/public/data/users`;
-      const q = query(collection(db, usersCollectionPath));
-
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const users = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        setAllUsers(users);
-      }, (error) => {
-        console.error("Firestore snapshot error:", error);
-        setMessage("Failed to load users for admin panel.");
-      });
-
-      return () => unsubscribe();
+    if (!isAuthReady || !db || (!isAdmin && !userProfile)) {
+      return;
     }
-  }, [isAuthReady, db, isAdmin, appId]);
 
-  // Firestore listener for attendance slots (Admin view)
+    const usersCollectionPath = `/artifacts/${appId}/public/data/users`;
+    const unsubUsers = onSnapshot(collection(db, usersCollectionPath), (snapshot) => {
+      setAllUsers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => console.error("Error fetching users:", error));
+
+    const slotsCollectionPath = `/artifacts/${appId}/public/data/attendance_slots`;
+    const unsubSlots = onSnapshot(collection(db, slotsCollectionPath), (snapshot) => {
+      setAttendanceSlots(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    }, (error) => console.error("Error fetching slots:", error));
+
+    return () => {
+      unsubUsers();
+      unsubSlots();
+    };
+  }, [isAuthReady, db, isAdmin, userProfile, appId]);
+
+  // Effect for auto-clearing the main page message after 1 second
   useEffect(() => {
-    if (isAuthReady && db) {
-      const slotsCollectionPath = `/artifacts/${appId}/public/data/attendance_slots`;
-      const q = query(collection(db, slotsCollectionPath));
-
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const slots = snapshot.docs.map(doc => ({
-          id: doc.id,
-          ...doc.data()
-        }));
-        setAttendanceSlots(slots);
-      }, (error) => {
-        console.error("Firestore snapshot error:", error);
-        setMessage("Failed to load attendance slots.");
-      });
-
-      return () => unsubscribe();
+    if (message) {
+      const timer = setTimeout(() => {
+        setMessage('');
+      }, 1000);
+      return () => clearTimeout(timer);
     }
-  }, [isAuthReady, db, appId]);
+  }, [message]);
   
+  // Effect for auto-clearing modal messages
+  useEffect(() => {
+    if (modalMessage) {
+      const timer = setTimeout(() => {
+        setModalMessage('');
+      }, 2000); // Give a bit more time to read modal messages
+      return () => clearTimeout(timer);
+    }
+  }, [modalMessage]);
+
+  // Effect for closing dropdown on click outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (profileDropdownRef.current && !profileDropdownRef.current.contains(event.target)) {
+        setShowProfileDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  // Effect for scroll-locking the body when any modal is open
+  useEffect(() => {
+    const isAnyModalOpen = 
+      showRegistrationSuccess || 
+      showCreateSlot || 
+      showImportModal || 
+      showMemberAttendanceDetails ||
+      showEditProfileModal ||
+      showChangePasswordModal ||
+      showForgotPasswordModal ||
+      !!editingSlot ||
+      !!editingUser ||
+      !!deletingUser ||
+      !!deletingSlot;
+
+    if (isAnyModalOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = 'auto';
+    }
+
+    // Cleanup function to restore scroll on component unmount
+    return () => {
+      document.body.style.overflow = 'auto';
+    };
+  }, [
+    showRegistrationSuccess, 
+    showCreateSlot, 
+    showImportModal, 
+    showMemberAttendanceDetails, 
+    showEditProfileModal, 
+    showChangePasswordModal, 
+    showForgotPasswordModal,
+    editingSlot,
+    editingUser,
+    deletingUser,
+    deletingSlot
+  ]);
+
+  // Effect for inactivity logout timer
+  useEffect(() => {
+    let inactivityTimeout;
+
+    const handleInactivityLogout = () => {
+      // Log out and reset state
+      setView('login');
+      setIsAdmin(false);
+      setUserId(null);
+      setUserProfile(null);
+      setLoginForm({ email: '', password: '' });
+      setMessage('You have been logged out due to inactivity.');
+    };
+
+    const resetInactivityTimer = () => {
+      clearTimeout(inactivityTimeout);
+      setRemainingTime(1800); // Reset display timer
+      // Set timeout for 30 minutes (1800000 milliseconds)
+      inactivityTimeout = setTimeout(handleInactivityLogout, 1800000);
+    };
+
+    if (isAdmin || userProfile) {
+      const events = ['mousemove', 'mousedown', 'keypress', 'scroll'];
+      events.forEach(event => window.addEventListener(event, resetInactivityTimer));
+      resetInactivityTimer(); // Start the timer
+
+      return () => { // Cleanup function
+        clearTimeout(inactivityTimeout);
+        events.forEach(event => window.removeEventListener(event, resetInactivityTimer));
+      };
+    }
+  }, [isAdmin, userProfile]);
+
+  // Effect for countdown display timer
+  useEffect(() => {
+    if (isAdmin || userProfile) {
+        const timer = setInterval(() => {
+            setRemainingTime(prevTime => {
+                if (prevTime <= 1) {
+                    clearInterval(timer);
+                    return 0;
+                }
+                return prevTime - 1;
+            });
+        }, 1000);
+
+        return () => clearInterval(timer);
+    }
+  }, [isAdmin, userProfile]);
+
+
   // Handle user registration
   const handleRegister = async (e) => {
     e.preventDefault();
@@ -294,7 +403,6 @@ const App = () => {
       }
 
       // User login successful
-      // setUserId(user.uid); // Removed unused userId assignment
       setIsAdmin(userData.isAdmin || false);
       setUserProfile({ id: user.uid, ...userData });
       setView('userDashboard');
@@ -308,20 +416,23 @@ const App = () => {
   // Handle forgot password request
   const handleForgotPassword = async (e) => {
     e.preventDefault();
-    setMessage('');
+    setModalMessage('');
     const emailToReset = e.target.email.value;
     if (!emailToReset) {
-      setMessage("Please enter your email address.");
+      setModalMessage("Please enter your email address.");
       return;
     }
     
     try {
         await sendPasswordResetEmail(auth, emailToReset);
-        setMessage("A password reset email has been sent to your address. Please check your inbox.");
-        setShowForgotPasswordModal(false);
+        setModalMessage("A password reset email has been sent to your address. Please check your inbox.");
+        setTimeout(() => {
+          setShowForgotPasswordModal(false);
+          setModalMessage('');
+        }, 1000)
     } catch (e) {
         console.error("Error sending password reset email:", e.message);
-        setMessage("Failed to send password reset email. Please ensure the email is valid and try again.");
+        setModalMessage("Failed to send password reset email. Please ensure the email is valid and try again.");
     }
   };
 
@@ -347,19 +458,17 @@ const App = () => {
 
   const handleDeleteUser = async (user) => {
     if (!db || !isAdmin) return;
+    setModalMessage('');
     setDeletingUser(user);
   };
 
   const confirmDelete = async () => {
     if (!db || !isAdmin || !deletingUser) return;
     try {
-      // First, delete the user from Firebase Authentication
-      const userToDelete = auth.currentUser;
-      if (userToDelete.uid === deletingUser.id) {
-        await deleteUser(userToDelete);
-      }
-
-      // Then, delete the user's Firestore document
+      // Deleting a user from Firebase Auth by an admin is not possible from the client-side SDK.
+      // The auth account will become an orphan but will be unusable as the Firestore doc is deleted.
+      
+      // Delete the user's Firestore document
       const userDocRef = doc(db, `/artifacts/${appId}/public/data/users`, deletingUser.id);
       await deleteDoc(userDocRef);
       
@@ -388,11 +497,14 @@ const App = () => {
         domain: editingUser.domain,
         position: editingUser.position
       });
-      setMessage(`User ${editingUser.username} details updated successfully.`);
-      setEditingUser(null);
+      setModalMessage(`User ${editingUser.username} details updated successfully.`);
+      setTimeout(() => {
+        setEditingUser(null);
+        setModalMessage('');
+      }, 1000);
     } catch (e) {
       console.error("Error updating user: ", e.message);
-      setMessage("Failed to update user details. Please try again.");
+      setModalMessage("Failed to update user details. Please try again.");
     }
   };
   
@@ -413,69 +525,121 @@ const App = () => {
     return matchesSearch && matchesFilter;
   });
 
+  const handleToggleEligibleUser = (userId) => {
+    setEligibleUsers(prev => 
+      prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+    );
+  };
+
+  const handleSelectAllEligible = () => {
+    const activeUserIds = allUsers.filter(u => u.status === 'active').map(u => u.id);
+    setEligibleUsers(activeUserIds);
+  };
+
+  const handleDeselectAllEligible = () => {
+    setEligibleUsers([]);
+  };
+
   // Handle admin actions (attendance slots)
   const handleCreateSlot = async (e) => {
     e.preventDefault();
     if (!db || !isAdmin) return;
     
     if (!newSlotForm.slotType || !newSlotForm.slotName || !newSlotForm.date) {
-        setMessage("Slot Type, Slot Name, and Date are mandatory.");
+        setModalMessage("Slot Type, Slot Name, and Date are mandatory.");
         return;
+    }
+    
+    if (eligibleUsers.length === 0) {
+      setModalMessage("Please select at least one eligible member for this slot.");
+      return;
     }
 
     try {
       const slotsCollectionPath = `/artifacts/${appId}/public/data/attendance_slots`;
       await addDoc(collection(db, slotsCollectionPath), {
         ...newSlotForm,
+        eligibleUserIds: eligibleUsers,
         createdAt: serverTimestamp(),
         attendance: [], // Initialize with an empty array for attendance
       });
-      setMessage("Attendance slot created successfully.");
-      setShowCreateSlot(false);
+      setModalMessage("Attendance slot created successfully.");
       setNewSlotForm({ slotType: '', slotName: '', date: '', venue: '', timings: '' });
+      setEligibleUsers([]);
+      setTimeout(() => {
+        setShowCreateSlot(false);
+        setModalMessage('');
+      }, 1000);
     } catch (e) {
       console.error("Error creating slot:", e.message);
-      setMessage("Failed to create attendance slot. Please try again.");
+      setModalMessage("Failed to create attendance slot. Please try again.");
     }
   };
 
   const handleEditSlot = async (e) => {
     e.preventDefault();
     if (!db || !isAdmin || !editingSlot) return;
+    
+    if (eligibleUsers.length === 0) {
+      setModalMessage("Please select at least one eligible member for this slot.");
+      return;
+    }
+    
     try {
-      const slotDocRef = doc(db, `/artifacts/${appId}/public/data/attendance_slots`, editingSlot.id);
-      await updateDoc(slotDocRef, {
-        slotName: editingSlot.slotName,
-        slotType: editingSlot.slotType,
-        date: editingSlot.date,
-        venue: editingSlot.venue,
-        timings: editingSlot.timings,
-      });
-      setMessage("Attendance slot updated successfully.");
-      setEditingSlot(null);
+        const slotDocRef = doc(db, `/artifacts/${appId}/public/data/attendance_slots`, editingSlot.id);
+        const { id, ...slotData } = editingSlot;
+        await updateDoc(slotDocRef, {
+          ...slotData,
+          eligibleUserIds: eligibleUsers,
+        });
+        setModalMessage("Slot updated successfully.");
+        setTimeout(() => {
+          setEditingSlot(null);
+          setModalMessage('');
+          setEligibleUsers([]);
+        }, 1000);
     } catch (e) {
-      console.error("Error editing slot:", e.message);
-      setMessage("Failed to update attendance slot. Please try again.");
+        console.error("Error updating slot:", e);
+        setModalMessage("Failed to update slot. Please try again.");
     }
   };
 
-  const handleDeleteSlot = async (slot) => {
+  const handleDeleteSlot = (slot) => {
     if (!db || !isAdmin) return;
+    setModalMessage('');
+    setDeletingSlot(slot);
+  };
+
+  const confirmDeleteSlot = async () => {
+    if (!db || !isAdmin || !deletingSlot) return;
     try {
-      const slotDocRef = doc(db, `/artifacts/${appId}/public/data/attendance_slots`, slot.id);
+      const slotDocRef = doc(db, `/artifacts/${appId}/public/data/attendance_slots`, deletingSlot.id);
       await deleteDoc(slotDocRef);
       setMessage("Attendance slot deleted successfully.");
+      setDeletingSlot(null);
     } catch (e) {
       console.error("Error deleting slot:", e.message);
       setMessage("Failed to delete attendance slot. Please try again.");
+      setDeletingSlot(null);
     }
   };
 
   const handleMarkAttendance = (slot) => {
+    setModalMessage('');
     setMarkingAttendanceForSlot(slot);
-    // Initialize attendance list with all ACTIVE users marked as absent
-    const activeUsers = allUsers.filter(user => user.status === 'active');
-    const initialAttendance = activeUsers.map(user => {
+    
+    const eligibleIds = slot.eligibleUserIds || [];
+    let usersForAttendance;
+
+    if (eligibleIds.length > 0) {
+      // New logic: Only use eligible users for this slot
+      usersForAttendance = allUsers.filter(user => eligibleIds.includes(user.id) && user.status === 'active');
+    } else {
+      // Fallback for old slots: Use all active users
+      usersForAttendance = allUsers.filter(user => user.status === 'active');
+    }
+
+    const initialAttendance = usersForAttendance.map(user => {
       const attendanceRecord = slot.attendance.find(a => a.userId === user.id);
       return {
         ...user,
@@ -514,6 +678,110 @@ const App = () => {
       console.error("Error saving attendance:", e.message);
       setMessage("Failed to save attendance. Please try again.");
     }
+  };
+
+  const handleExportAttendance = () => {
+    if (!markingAttendanceForSlot || slotAttendance.length === 0) {
+      setMessage("No attendance data to export.");
+      return;
+    }
+
+    const header = ['Full Name', 'email', 'status'];
+    const rows = slotAttendance.map(user => 
+      [user.username, user.email, user.isPresent ? 'present' : 'absent'].join(',')
+    );
+
+    const csvContent = [header.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    const fileName = `attendance_${markingAttendanceForSlot.slotName.replace(/ /g, '_')}_${markingAttendanceForSlot.date}.csv`;
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDownloadTemplate = () => {
+    const activeUsers = allUsers.filter(user => user.status === 'active');
+    if (activeUsers.length === 0) {
+        setModalMessage("There are no active users to include in the template.");
+        return;
+    }
+
+    const header = ['Full Name', 'email', 'status'];
+    const rows = activeUsers.map(user => 
+      [user.username, user.email, 'absent'].join(',') // Default status is 'absent'
+    );
+    
+    const csvContent = [header.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'attendance_template.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleImportAttendance = () => {
+    if (!importFile) {
+      setModalMessage("Please select a file to import.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const csvData = event.target.result;
+      const lines = csvData.split('\n');
+      if (lines.length < 2) {
+        setModalMessage("Invalid CSV file. It must contain headers and at least one data row.");
+        return;
+      }
+
+      const headers = lines[0].trim().toLowerCase().split(',');
+      const emailIndex = headers.indexOf('email');
+      const statusIndex = headers.indexOf('status');
+
+      if (emailIndex === -1 || statusIndex === -1) {
+        setModalMessage("CSV file must contain 'email' and 'status' columns.");
+        return;
+      }
+
+      const updatedAttendance = [...slotAttendance];
+      let updatedCount = 0;
+
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (line) {
+          const values = line.split(',');
+          const email = values[emailIndex]?.trim();
+          const status = values[statusIndex]?.trim().toLowerCase();
+          
+          const userIndex = updatedAttendance.findIndex(user => user.email === email);
+          if (userIndex !== -1) {
+            updatedAttendance[userIndex].isPresent = (status === 'present');
+            updatedCount++;
+          }
+        }
+      }
+
+      setSlotAttendance(updatedAttendance);
+      setModalMessage(`${updatedCount} records updated successfully from the imported file.`);
+      setImportFile(null);
+      setTimeout(() => {
+        setShowImportModal(false);
+        setModalMessage('');
+      }, 1000);
+    };
+
+    reader.onerror = () => {
+      setModalMessage("Error reading the file.");
+    };
+
+    reader.readAsText(importFile);
   };
 
   const filteredAttendanceList = slotAttendance.filter(user => {
@@ -580,7 +848,7 @@ const App = () => {
   const downloadCSV = () => {
     const activeUsers = allUsers.filter(user => user.status === 'active');
     const header = [
-      'Username',
+      'Full Name',
       'Domain',
       'Position',
       'Overall Attendance (%)',
@@ -616,6 +884,7 @@ const App = () => {
   };
   
   const handleViewMemberDetails = (member) => {
+    setModalMessage('');
     setSelectedMember(member);
     setShowMemberAttendanceDetails(true);
   };
@@ -649,11 +918,14 @@ const App = () => {
         position: userProfile.position,
         photo: userProfile.photo,
       });
-      setMessage("Profile updated successfully!");
-      setShowEditProfileModal(false);
+      setModalMessage("Profile updated successfully!");
+      setTimeout(() => {
+        setShowEditProfileModal(false);
+        setModalMessage('');
+      }, 1000);
     } catch (e) {
       console.error("Error updating profile:", e);
-      setMessage("Failed to update profile.");
+      setModalMessage("Failed to update profile.");
     }
   };
 
@@ -681,7 +953,7 @@ const App = () => {
       setTimeout(() => {
         setShowChangePasswordModal(false);
         setPasswordChangeMessage('');
-      }, 500);
+      }, 1000);
       return;
     }
 
@@ -706,7 +978,7 @@ const App = () => {
       setTimeout(() => {
         setShowChangePasswordModal(false);
         setPasswordChangeMessage('');
-      }, 500);
+      }, 1000);
     } catch (e) {
       console.error("Error changing password:", e);
       setPasswordChangeMessage("Failed to change password. Please re-login and try again.");
@@ -746,7 +1018,17 @@ const App = () => {
     };
   });
 
-  // Removed unused getSlotTiming function
+  const getSlotTiming = (slot) => {
+    const startTime = slot.timings.split('-')[0].trim();
+    const endTime = slot.timings.split('-')[1].trim();
+    return `${startTime} - ${endTime}`;
+  };
+
+  const formatTime = (seconds) => {
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${String(minutes).padStart(2, '0')}m : ${String(remainingSeconds).padStart(2, '0')}s`;
+  };
 
   
   // Nav bar and main content
@@ -755,52 +1037,67 @@ const App = () => {
       <h1 className="text-xl sm:text-2xl font-bold">
         Meta Developer Communities
       </h1>
-      {isAdmin ? (
-        <div className="flex space-x-4">
-          <button onClick={() => { setAdminView('dashboard'); setMarkingAttendanceForSlot(null); }} className={`px-4 py-2 rounded-full font-medium ${adminView === 'dashboard' ? 'bg-[#1e5a4f] text-white shadow-md' : 'text-gray-200 hover:text-white'}`}>
-            Dashboard
-          </button>
-          <button onClick={() => { setAdminView('manageUsers'); setMarkingAttendanceForSlot(null); }} className={`px-4 py-2 rounded-full font-medium ${adminView === 'manageUsers' ? 'bg-[#1e5a4f] text-white shadow-md' : 'text-gray-200 hover:text-white'}`}>
-            Manage Users
-          </button>
-          <button onClick={() => { setAdminView('attendanceSlots'); setMarkingAttendanceForSlot(null); }} className={`px-4 py-2 rounded-full font-medium ${adminView === 'attendanceSlots' ? 'bg-[#1e5a4f] text-white shadow-md' : 'text-gray-200 hover:text-white'}`}>
-            Attendance Slots
-          </button>
-        </div>
-      ) : null}
-      <div className="relative">
-        {userProfile && !isAdmin ? (
-          <button onClick={() => setShowProfileDropdown(!showProfileDropdown)} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-gray-700 transition-transform transform hover:scale-110">
-            {userProfile.photo ? (
-              <img src={userProfile.photo} alt="Profile" className="w-full h-full rounded-full object-cover" />
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M17.982 18.725A7.488 7.488 0 0012 15.75a7.488 7.488 0 00-5.982 2.975m11.963 0a7.5 7.5 0 10-11.963 0m11.963 0A8.966 8.966 0 0112 21a8.966 8.966 0 01-5.982-2.275M15 9.75a3 3 0 11-6 0 3 3 0 016 0z" />
-              </svg>
-            )}
-          </button>
-        ) : isAdmin ? (
-          <button onClick={() => setShowProfileDropdown(!showProfileDropdown)} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-gray-700 transition-transform transform hover:scale-110">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M17.982 18.725A7.488 7.488 0 0012 15.75a7.488 7.488 0 00-5.982 2.975m11.963 0a7.5 7.5 0 10-11.963 0m11.963 0A8.966 8.966 0 0112 21a8.966 8.966 0 01-5.982-2.275M15 9.75a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
-        ) : null}
-        {showProfileDropdown && (
-          <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-20">
-            {!isAdmin && (
-              <button onClick={() => { setShowEditProfileModal(true); setShowProfileDropdown(false); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">
-                Edit Details
+      <div className="flex items-center space-x-4">
+          {isAdmin ? (
+            <div className="hidden md:flex space-x-4">
+              <button onClick={() => { setAdminView('dashboard'); setMarkingAttendanceForSlot(null); setShowProfileDropdown(false); }} className={`px-4 py-2 rounded-full font-medium ${adminView === 'dashboard' ? 'bg-[#1e5a4f] text-white shadow-md' : 'text-gray-200 hover:text-white'}`}>
+                Dashboard
               </button>
+              <button onClick={() => { setAdminView('manageUsers'); setMarkingAttendanceForSlot(null); setShowProfileDropdown(false); }} className={`px-4 py-2 rounded-full font-medium ${adminView === 'manageUsers' ? 'bg-[#1e5a4f] text-white shadow-md' : 'text-gray-200 hover:text-white'}`}>
+                Manage Users
+              </button>
+              <button onClick={() => { setAdminView('attendanceSlots'); setMarkingAttendanceForSlot(null); setShowProfileDropdown(false); }} className={`px-4 py-2 rounded-full font-medium ${adminView === 'attendanceSlots' ? 'bg-[#1e5a4f] text-white shadow-md' : 'text-gray-200 hover:text-white'}`}>
+                Attendance Slots
+              </button>
+            </div>
+          ) : null}
+          {(isAdmin || userProfile) && (
+              <div className="flex items-center text-sm font-mono bg-black bg-opacity-20 px-3 py-1 rounded-full">
+                  <span>Session</span>
+                  <svg className="animate-spin h-4 w-4 mx-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  <span>: {formatTime(remainingTime)}</span>
+              </div>
+          )}
+          <div 
+            className="relative"
+            ref={profileDropdownRef}
+          >
+            {userProfile && !isAdmin ? (
+              <button onClick={() => setShowProfileDropdown(prev => !prev)} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-gray-700 transition-transform transform hover:scale-110">
+                {userProfile.photo ? (
+                  <img src={userProfile.photo} alt="Profile" className="w-full h-full rounded-full object-cover" />
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M17.982 18.725A7.488 7.488 0 0012 15.75a7.488 7.488 0 00-5.982 2.975m11.963 0a7.5 7.5 0 10-11.963 0m11.963 0A8.966 8.966 0 0112 21a8.966 8.966 0 01-5.982-2.275M15 9.75a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                )}
+              </button>
+            ) : isAdmin ? (
+              <button onClick={() => setShowProfileDropdown(prev => !prev)} className="w-10 h-10 rounded-full bg-white flex items-center justify-center text-gray-700 transition-transform transform hover:scale-110">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17.982 18.725A7.488 7.488 0 0012 15.75a7.488 7.488 0 00-5.982 2.975m11.963 0a7.5 7.5 0 10-11.963 0m11.963 0A8.966 8.966 0 0112 21a8.966 8.966 0 01-5.982-2.275M15 9.75a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </button>
+            ) : null}
+            {showProfileDropdown && (
+              <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-20">
+                {!isAdmin && (
+                  <button onClick={() => { setModalMessage(''); setShowEditProfileModal(true); setShowProfileDropdown(false); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">
+                    Edit Details
+                  </button>
+                )}
+                <button onClick={() => { setPasswordChangeMessage(''); setShowChangePasswordModal(true); setShowProfileDropdown(false); setPasswordForm({ currentPassword: '', newPassword: '' }); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">
+                  Change Password
+                </button>
+                <button onClick={() => { setView('login'); setIsAdmin(false); setMessage(''); setLoginForm({ email: '', password: '' }); setShowProfileDropdown(false); setUserProfile(null); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">
+                  Logout
+                </button>
+              </div>
             )}
-            <button onClick={() => { setShowChangePasswordModal(true); setShowProfileDropdown(false); setPasswordForm({ currentPassword: '', newPassword: '' }); setPasswordChangeMessage(''); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">
-              Change Password
-            </button>
-            <button onClick={() => { setView('login'); setIsAdmin(false); setMessage(''); setLoginForm({ email: '', password: '' }); setShowProfileDropdown(false); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">
-              Logout
-            </button>
           </div>
-        )}
       </div>
     </nav>
   );
@@ -809,8 +1106,8 @@ const App = () => {
     switch (view) {
       case 'register':
         return (
-          <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-            <div className="w-full max-w-lg bg-white rounded-lg shadow-xl p-8 space-y-6">
+          <div className="flex items-center justify-center p-4">
+            <div className="w-full max-w-xl bg-white rounded-lg shadow-xl p-8 space-y-6">
               <h2 className="text-2xl font-bold text-center text-gray-800">Register New Member</h2>
               {message && (
                 <div className="text-center text-sm font-medium text-red-500">
@@ -823,8 +1120,8 @@ const App = () => {
                   <input type="file" onChange={(e) => setRegisterForm({ ...registerForm, photo: e.target.files[0] })} className="mt-1 block w-full text-gray-900 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-gray-50 file:text-gray-700 hover:file:bg-gray-100" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium">Username <span className="text-red-500">*</span></label>
-                  <input type="text" placeholder="Enter username" value={registerForm.username} onChange={(e) => setRegisterForm({ ...registerForm, username: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
+                  <label className="block text-sm font-medium">Full Name <span className="text-red-500">*</span></label>
+                  <input type="text" placeholder="Enter full name" value={registerForm.username} onChange={(e) => setRegisterForm({ ...registerForm, username: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium">Password <span className="text-red-500">*</span></label>
@@ -868,8 +1165,8 @@ const App = () => {
                   </select>
                 </div>
                 <div className="flex flex-col sm:flex-row space-y-4 sm:space-y-0 sm:space-x-4">
-                  <button type="submit" className="w-full py-3 px-6 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">Register</button>
-                  <button type="button" onClick={() => setView('login')} className="w-full py-3 px-6 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Back to Login</button>
+                  <button type="submit" className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">Register</button>
+                  <button type="button" onClick={() => setView('login')} className="w-full py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Back to Login</button>
                 </div>
               </form>
             </div>
@@ -939,7 +1236,7 @@ const App = () => {
                     <table className="min-w-full divide-y divide-gray-200">
                       <thead className="bg-gray-50">
                         <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Username</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Full Name</th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Domain</th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Position</th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Overall (%)</th>
@@ -1036,7 +1333,7 @@ const App = () => {
                         <thead className="bg-gray-50">
                           <tr>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Photo</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Username</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Full Name</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Contact</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Reg No</th>
@@ -1076,7 +1373,7 @@ const App = () => {
                                     {user.status === 'active' ? 'Deactivate' : 'Activate'}
                                   </button>
                                   <button
-                                    onClick={() => setEditingUser(user)}
+                                    onClick={() => { setModalMessage(''); setEditingUser(user); }}
                                     className="text-indigo-600 hover:text-indigo-900 font-semibold"
                                   >
                                     Edit
@@ -1105,9 +1402,13 @@ const App = () => {
                   <div className="min-h-screen bg-gray-100 p-4 sm:p-8">
                     <div className="flex justify-between items-center">
                       <h2 className="text-2xl font-bold text-gray-800">Mark Attendance for {markingAttendanceForSlot.slotName}</h2>
-                      <button onClick={() => setMarkingAttendanceForSlot(null)} className="py-2 px-6 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full shadow-lg transition-colors">
-                        Back to Slots
-                      </button>
+                      <div className="flex space-x-2">
+                        <button onClick={handleExportAttendance} className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-full shadow-lg transition-colors">Export to CSV</button>
+                        <button onClick={() => { setModalMessage(''); setShowImportModal(true); }} className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">Import from CSV</button>
+                        <button onClick={() => setMarkingAttendanceForSlot(null)} className="py-2 px-6 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full shadow-lg transition-colors">
+                          Back to Slots
+                        </button>
+                      </div>
                     </div>
 
                     <div className="flex flex-col sm:flex-row items-center justify-between mt-4">
@@ -1146,7 +1447,7 @@ const App = () => {
                       <table className="min-w-full divide-y divide-gray-200">
                         <thead className="bg-gray-50">
                           <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">User Name</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Full Name</th>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                           </tr>
                         </thead>
@@ -1184,7 +1485,7 @@ const App = () => {
                           ) : (
                             <tr>
                               <td colSpan="2" className="px-6 py-4 text-center text-gray-500">
-                                No active users found.
+                                No eligible users found for this slot.
                               </td>
                             </tr>
                           )}
@@ -1201,7 +1502,7 @@ const App = () => {
                 <>
                   <div className="flex justify-between items-center mt-6">
                     <div className="flex space-x-4">
-                      <button onClick={() => setShowCreateSlot(true)} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-full shadow-lg transition-colors">
+                      <button onClick={() => { setModalMessage(''); const activeUsers = allUsers.filter(u => u.status === 'active').map(u => u.id); setEligibleUsers(activeUsers); setShowCreateSlot(true); }} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-full shadow-lg transition-colors">
                         Create Slot
                       </button>
                       <select
@@ -1265,7 +1566,7 @@ const App = () => {
                               <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                 <div className="flex space-x-4">
                                   <button onClick={() => handleMarkAttendance(slot)} className="text-green-600 hover:text-green-900 font-semibold">Mark Attendance</button>
-                                  <button onClick={() => setEditingSlot(slot)} className="text-indigo-600 hover:text-indigo-900 font-semibold">Edit</button>
+                                  <button onClick={() => { setModalMessage(''); setEligibleUsers(slot.eligibleUserIds || allUsers.filter(u => u.status === 'active').map(u => u.id)); setEditingSlot(slot); }} className="text-indigo-600 hover:text-indigo-900 font-semibold">Edit</button>
                                   <button onClick={() => handleDeleteSlot(slot)} className="text-red-600 hover:text-red-900 font-semibold">Delete</button>
                                 </div>
                               </td>
@@ -1401,7 +1702,7 @@ const App = () => {
                   <button type="submit" className="w-full py-3 px-6 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">Login</button>
                   <button type="button" onClick={() => setView('register')} className="w-full py-3 px-6 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Register New Account</button>
                   <div className="text-center">
-                    <button type="button" onClick={() => setShowForgotPasswordModal(true)} className="text-sm text-green-600 hover:underline">Forgot Password?</button>
+                    <button type="button" onClick={() => { setModalMessage(''); setShowForgotPasswordModal(true); }} className="text-sm text-green-600 hover:underline">Forgot Password?</button>
                   </div>
                 </div>
               </form>
@@ -1414,14 +1715,28 @@ const App = () => {
   return (
     <div className="min-h-screen bg-[#F5F5DC]">
       {(view === 'login' || view === 'register') ? (
-        <div className="min-h-screen flex items-center justify-center p-4">
-          <div className="w-full max-w-lg">
+        <div className="min-h-screen grid grid-cols-1 md:grid-cols-2">
+          <div className="hidden md:flex flex-col items-center justify-center bg-[#2a7b6a] text-white p-12">
+            <img 
+              src="https://imgpx.com/WAerOknABX2d.jpg" 
+              alt="MDC Team" 
+              className="w-full h-auto rounded-2xl shadow-2xl object-cover mb-8"
+            />
+            <h1 className="text-5xl font-bold">My-MDC</h1>
+            <p className="mt-4 text-center">Your unified portal for attendance and member management.</p>
+          </div>
+          <div className="flex items-center justify-center p-4">
             {renderContent()}
           </div>
         </div>
       ) : (
         <div className="min-h-screen bg-[#F5F5DC]">
           {renderNav()}
+          {message && (
+            <div className="m-4 p-3 text-center font-medium text-white bg-blue-500 rounded-lg shadow-md">
+              {message}
+            </div>
+          )}
           <div className="px-4 py-4">
             {renderContent()}
           </div>
@@ -1440,65 +1755,113 @@ const App = () => {
         </div>
       )}
 
-      {showCreateSlot && (
+      {(showCreateSlot || editingSlot) && (
         <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
-            <h3 className="text-xl font-bold text-center mb-4">Create New Slot</h3>
-            {message && (
-              <div className="text-center text-sm font-medium text-red-500 mb-4">
-                {message}
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-2xl max-h-[90vh] flex flex-col">
+            <h3 className="text-xl font-bold text-center mb-4">{editingSlot ? `Edit Slot: ${editingSlot.slotName}` : "Create New Slot"}</h3>
+            {modalMessage && (
+              <div className={`text-center text-sm font-medium mb-4 ${modalMessage.includes('successfully') ? 'text-green-500' : 'text-red-500'}`}>
+                {modalMessage}
               </div>
             )}
-            <form onSubmit={handleCreateSlot} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium">Slot Type <span className="text-red-500">*</span></label>
-                <select value={newSlotForm.slotType} onChange={(e) => setNewSlotForm({ ...newSlotForm, slotType: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300">
-                  <option value="">Select Slot Type</option>
-                  {slotTypes.map(t => <option key={t} value={t}>{t}</option>)}
-                </select>
+            <form onSubmit={editingSlot ? handleEditSlot : handleCreateSlot} className="flex-grow overflow-y-auto pr-2">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium">Slot Type <span className="text-red-500">*</span></label>
+                  <select value={editingSlot ? editingSlot.slotType : newSlotForm.slotType} onChange={(e) => editingSlot ? setEditingSlot({ ...editingSlot, slotType: e.target.value }) : setNewSlotForm({ ...newSlotForm, slotType: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300">
+                    <option value="">Select Slot Type</option>
+                    {slotTypes.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium">Slot Name <span className="text-red-500">*</span></label>
+                  <input type="text" placeholder="Slot Name" value={editingSlot ? editingSlot.slotName : newSlotForm.slotName} onChange={(e) => editingSlot ? setEditingSlot({ ...editingSlot, slotName: e.target.value }) : setNewSlotForm({ ...newSlotForm, slotName: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium">Date <span className="text-red-500">*</span></label>
+                  <input type="date" value={editingSlot ? editingSlot.date : newSlotForm.date} onChange={(e) => editingSlot ? setEditingSlot({ ...editingSlot, date: e.target.value }) : setNewSlotForm({ ...newSlotForm, date: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium">Venue</label>
+                  <input type="text" placeholder="Venue" value={editingSlot ? editingSlot.venue : newSlotForm.venue} onChange={(e) => editingSlot ? setEditingSlot({ ...editingSlot, venue: e.target.value }) : setNewSlotForm({ ...newSlotForm, venue: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
+                </div>
+                <div className="col-span-1 md:col-span-2">
+                  <label className="block text-sm font-medium">Timings</label>
+                  <input type="text" placeholder="Timings (e.g., 10:00 AM - 12:00 PM)" value={editingSlot ? editingSlot.timings : newSlotForm.timings} onChange={(e) => editingSlot ? setEditingSlot({ ...editingSlot, timings: e.target.value }) : setNewSlotForm({ ...newSlotForm, timings: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium">Slot Name <span className="text-red-500">*</span></label>
-                <input type="text" placeholder="Slot Name" value={newSlotForm.slotName} onChange={(e) => setNewSlotForm({ ...newSlotForm, slotName: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
+              
+              <div className="mt-6">
+                <h4 className="text-lg font-semibold mb-2">Eligible Members</h4>
+                <div className="flex justify-between items-center mb-2">
+                  <input
+                    type="text"
+                    placeholder="Search members..."
+                    value={eligibleUserSearch}
+                    onChange={(e) => setEligibleUserSearch(e.target.value)}
+                    className="w-1/2 p-2 rounded-lg bg-gray-100 border border-gray-300"
+                  />
+                  <div className="flex space-x-2">
+                    <button type="button" onClick={handleSelectAllEligible} className="text-sm text-blue-600 font-semibold">Select All</button>
+                    <button type="button" onClick={handleDeselectAllEligible} className="text-sm text-red-600 font-semibold">Deselect All</button>
+                  </div>
+                </div>
+                <div className="max-h-48 overflow-y-auto border rounded-lg p-2">
+                  {allUsers.filter(u => u.status === 'active' && u.username.toLowerCase().includes(eligibleUserSearch.toLowerCase())).map(user => (
+                    <div key={user.id} className="flex items-center space-x-2 p-1">
+                      <input
+                        type="checkbox"
+                        id={`eligible-${user.id}`}
+                        checked={eligibleUsers.includes(user.id)}
+                        onChange={() => handleToggleEligibleUser(user.id)}
+                        className="h-4 w-4 text-indigo-600 border-gray-300 rounded"
+                      />
+                      <label htmlFor={`eligible-${user.id}`}>{user.username}</label>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium">Date <span className="text-red-500">*</span></label>
-                <input type="date" value={newSlotForm.date} onChange={(e) => setNewSlotForm({ ...newSlotForm, date: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium">Venue</label>
-                <input type="text" placeholder="Venue" value={newSlotForm.venue} onChange={(e) => setNewSlotForm({ ...newSlotForm, venue: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium">Timings</label>
-                <input type="text" placeholder="Timings (e.g., 10:00 AM - 12:00 PM)" value={newSlotForm.timings} onChange={(e) => setNewSlotForm({ ...newSlotForm, timings: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
-              </div>
-              <div className="flex justify-end space-x-4 mt-4">
-                <button type="button" onClick={() => setShowCreateSlot(false)} className="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Cancel</button>
-                <button type="submit" className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">Create</button>
+
+              <div className="flex justify-end space-x-4 mt-4 pt-4 border-t">
+                <button type="button" onClick={() => { setShowCreateSlot(false); setEditingSlot(null); setEligibleUsers([]); }} className="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Cancel</button>
+                <button type="submit" className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">{editingSlot ? 'Save Changes' : 'Create'}</button>
               </div>
             </form>
           </div>
         </div>
       )}
-
-      {editingSlot && (
+      
+      {showImportModal && (
         <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
-            <h3 className="text-xl font-bold text-center mb-4">Edit Slot: {editingSlot.slotName}</h3>
-            <form onSubmit={handleEditSlot} className="space-y-4">
-              <select value={editingSlot.slotType} onChange={(e) => setEditingSlot({ ...editingSlot, slotType: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300">
-                {slotTypes.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <input type="text" placeholder="Slot Name" value={editingSlot.slotName} onChange={(e) => setEditingSlot({ ...editingSlot, slotName: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
-              <input type="date" value={editingSlot.date} onChange={(e) => setEditingSlot({ ...editingSlot, date: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
-              <input type="text" placeholder="Venue" value={editingSlot.venue} onChange={(e) => setEditingSlot({ ...editingSlot, venue: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
-              <input type="text" placeholder="Timings (e.g., 10:00 AM - 12:00 PM)" value={editingSlot.timings} onChange={(e) => setEditingSlot({ ...editingSlot, timings: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
-              <div className="flex justify-end space-x-4 mt-4">
-                <button type="button" onClick={() => setEditingSlot(null)} className="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Cancel</button>
-                <button type="submit" className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">Save Changes</button>
-              </div>
-            </form>
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md text-center">
+            <h3 className="text-xl font-bold mb-4">Import Attendance from CSV</h3>
+            {modalMessage && (
+                <div className={`text-center text-sm font-medium mb-4 ${modalMessage.includes('successfully') ? 'text-green-500' : 'text-red-500'}`}>
+                    {modalMessage}
+                </div>
+            )}
+            <div className="text-left mb-4 p-4 bg-gray-100 rounded-lg">
+              <p className="font-semibold">Instructions:</p>
+              <ol className="list-decimal list-inside text-sm">
+                <li>Download the template. It contains all active members.</li>
+                <li>Edit the 'status' column to 'present' for attended members.</li>
+                <li>The 'Full Name' column is for your reference and will be ignored.</li>
+                <li>Choose the edited file and click "Upload and Apply".</li>
+              </ol>
+            </div>
+            <button onClick={handleDownloadTemplate} className="w-full py-2 px-4 mb-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Download Template (Active Users)</button>
+            
+            <input 
+              type="file" 
+              accept=".csv"
+              onChange={(e) => setImportFile(e.target.files[0])}
+              className="w-full mb-4 text-gray-900 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-gray-50 file:text-gray-700 hover:file:bg-gray-100"
+            />
+            
+            <div className="flex justify-center space-x-4">
+              <button onClick={() => { setShowImportModal(false); setImportFile(null); }} className="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Cancel</button>
+              <button onClick={handleImportAttendance} className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">Upload and Apply</button>
+            </div>
           </div>
         </div>
       )}
@@ -1507,8 +1870,13 @@ const App = () => {
         <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md">
             <h3 className="text-xl font-bold text-center mb-4">Edit User: {editingUser.username}</h3>
+            {modalMessage && (
+                <div className={`text-center text-sm font-medium mb-4 ${modalMessage.includes('successfully') ? 'text-green-500' : 'text-red-500'}`}>
+                    {modalMessage}
+                </div>
+            )}
             <form onSubmit={handleSaveEdit} className="space-y-4">
-              <input type="text" placeholder="Username" value={editingUser.username || ''} onChange={(e) => setEditingUser({ ...editingUser, username: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
+              <input type="text" placeholder="Full Name" value={editingUser.username || ''} onChange={(e) => setEditingUser({ ...editingUser, username: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
               <input type="email" placeholder="Email" value={editingUser.email || ''} onChange={(e) => setEditingUser({ ...editingUser, email: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
               <input type="tel" placeholder="Contact Number" value={editingUser.contact || ''} onChange={(e) => setEditingUser({ ...editingUser, contact: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
               <select value={editingUser.year || ''} onChange={(e) => setEditingUser({ ...editingUser, year: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300">
@@ -1542,6 +1910,19 @@ const App = () => {
             <div className="flex justify-center space-x-4">
               <button onClick={() => setDeletingUser(null)} className="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Cancel</button>
               <button onClick={confirmDelete} className="py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-full shadow-lg transition-colors">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {deletingSlot && (
+        <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center">
+            <h3 className="text-xl font-bold mb-4">Confirm Deletion</h3>
+            <p className="mb-4">Are you sure you want to delete the slot "{deletingSlot.slotName}"? This action cannot be undone.</p>
+            <div className="flex justify-center space-x-4">
+              <button onClick={() => setDeletingSlot(null)} className="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Cancel</button>
+              <button onClick={confirmDeleteSlot} className="py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-full shadow-lg transition-colors">Delete</button>
             </div>
           </div>
         </div>
@@ -1628,6 +2009,11 @@ const App = () => {
         <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md max-h-screen overflow-y-auto">
             <h3 className="text-xl font-bold text-center mb-4">Edit Your Profile</h3>
+            {modalMessage && (
+                <div className={`text-center text-sm font-medium mb-4 ${modalMessage.includes('successfully') ? 'text-green-500' : 'text-red-500'}`}>
+                    {modalMessage}
+                </div>
+            )}
             <form onSubmit={handleEditProfile} className="space-y-4">
               <div className="flex justify-center mb-4">
                 {userProfile.photo ? (
@@ -1637,7 +2023,7 @@ const App = () => {
                 )}
               </div>
               <div>
-                <label className="block text-sm font-medium">Username</label>
+                <label className="block text-sm font-medium">Full Name</label>
                 <input type="text" value={userProfile.username || ''} onChange={(e) => setUserProfile({ ...userProfile, username: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
               </div>
               <div>
@@ -1660,7 +2046,7 @@ const App = () => {
               </div>
               <div>
                 <label className="block text-sm font-medium">Program</label>
-                <input type="text" value={userProfile.program || ''} onChange={(e) => setUserProfile({ ...userProfile, program: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
+                <input type="text" placeholder="Enter your program" value={userProfile.program} onChange={(e) => setUserProfile({ ...userProfile, program: e.target.value })} className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" />
               </div>
               <div>
                 <label className="block text-sm font-medium">Domain</label>
@@ -1718,6 +2104,11 @@ const App = () => {
         <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center">
             <h3 className="text-xl font-bold mb-4">Forgot Password?</h3>
+            {modalMessage && (
+                <div className={`text-center text-sm font-medium mb-4 ${modalMessage.includes('sent') ? 'text-green-500' : 'text-red-500'}`}>
+                    {modalMessage}
+                </div>
+            )}
             <p className="mb-4">Enter your email and a password reset email will be sent to your account.</p>
             <form onSubmit={handleForgotPassword} className="space-y-4">
               <input type="email" name="email" placeholder="Enter your email" className="w-full p-3 rounded-lg bg-gray-100 border border-gray-300" required />
@@ -1734,3 +2125,4 @@ const App = () => {
 };
 
 export default App;
+
