@@ -7,7 +7,6 @@ const App = () => {
   // State for Firebase services and user information
   const [db, setDb] = useState(null);
   const [auth, setAuth] = useState(null);
-  const [userId, setUserId] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [adminPassword, setAdminPassword] = useState('Meta@1234');
@@ -34,6 +33,10 @@ const App = () => {
   const [showRegistrationSuccess, setShowRegistrationSuccess] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
+  const [filterDomain, setFilterDomain] = useState('all');
+  const [filterYear, setFilterYear] = useState('all');
+  const [filterPosition, setFilterPosition] = useState('all');
+
 
   // State for Attendance Slots
   const [attendanceSlots, setAttendanceSlots] = useState([]);
@@ -107,18 +110,30 @@ const App = () => {
     setAuth(authInstance);
     setDb(dbInstance);
     
+    // Preload login image
+    const loginImage = new Image();
+    loginImage.src = "https://i.imghippo.com/files/hmwO3797DM.jpg";
+
+    // Check session storage for admin state
+    const savedIsAdmin = sessionStorage.getItem('isAdmin');
+    if (savedIsAdmin === 'true') {
+      setIsAdmin(true);
+      setView('adminDashboard');
+    }
+
     const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
       if (user) {
-        setUserId(user.uid);
         const userDocRef = doc(dbInstance, `/artifacts/${appId}/public/data/users`, user.uid);
         const userDoc = await getDoc(userDocRef);
         if (userDoc.exists()) {
           setUserProfile({ id: user.uid, ...userDoc.data() });
+          setView('userDashboard');
         }
       } else {
-        setUserId(null);
         setUserProfile(null);
-        setIsAdmin(false);
+        if (sessionStorage.getItem('isAdmin') !== 'true') {
+            setView('login');
+        }
       }
       setIsAuthReady(true);
     });
@@ -226,9 +241,9 @@ const App = () => {
 
     const handleInactivityLogout = () => {
       // Log out and reset state
+      sessionStorage.removeItem('isAdmin');
       setView('login');
       setIsAdmin(false);
-      setUserId(null);
       setUserProfile(null);
       setLoginForm({ email: '', password: '' });
       setMessage('You have been logged out due to inactivity.');
@@ -368,6 +383,7 @@ const App = () => {
     const isAdminUser = loginForm.email === 'mdc_vsp@gitam.in' && loginForm.password === adminPassword;
     
     if (isAdminUser) {
+      sessionStorage.setItem('isAdmin', 'true');
       setIsAdmin(true);
       setView('adminDashboard');
       setAdminView('dashboard');
@@ -411,6 +427,17 @@ const App = () => {
       console.error("Error during login: ", e.message);
       setMessage("Login failed. Invalid email or password.");
     }
+  };
+  
+  const handleLogout = () => {
+    sessionStorage.removeItem('isAdmin');
+    setIsAdmin(false);
+    setUserProfile(null);
+    setView('login');
+    setMessage('');
+    setLoginForm({ email: '', password: '' });
+    setShowProfileDropdown(false);
+    if(auth) auth.signOut();
   };
 
   // Handle forgot password request
@@ -504,7 +531,7 @@ const App = () => {
       }, 1000);
     } catch (e) {
       console.error("Error updating user: ", e.message);
-      setModalMessage("Failed to update user details. Please try again.");
+      setMessage("Failed to update user details. Please try again.");
     }
   };
   
@@ -520,10 +547,40 @@ const App = () => {
       user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
       user.email.toLowerCase().includes(searchTerm.toLowerCase());
     
-    const matchesFilter = filterStatus === 'all' || user.status === filterStatus;
+    const matchesStatus = filterStatus === 'all' || user.status === filterStatus;
+    const matchesDomain = filterDomain === 'all' || user.domain === filterDomain;
+    const matchesYear = filterYear === 'all' || user.year === filterYear;
+    const matchesPosition = filterPosition === 'all' || user.position === filterPosition;
 
-    return matchesSearch && matchesFilter;
+    return matchesSearch && matchesStatus && matchesDomain && matchesYear && matchesPosition;
   });
+  
+  const downloadUsersCSV = () => {
+    const header = ['Full Name', 'Email', 'Contact', 'Year', 'Reg No', 'Program', 'Domain', 'Position', 'Status'];
+    const rows = filteredUsers.map(user => 
+      [
+        `"${user.username}"`, 
+        user.email, 
+        user.contact, 
+        user.year, 
+        user.regNo, 
+        user.program, 
+        user.domain, 
+        user.position, 
+        user.status
+      ].join(',')
+    );
+
+    const csvContent = [header.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'mdc_users_list.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const handleToggleEligibleUser = (userId) => {
     setEligibleUsers(prev => 
@@ -597,6 +654,7 @@ const App = () => {
           setEditingSlot(null);
           setModalMessage('');
           setEligibleUsers([]);
+          setEligibleUserSearch('');
         }, 1000);
     } catch (e) {
         console.error("Error updating slot:", e);
@@ -1092,7 +1150,7 @@ const App = () => {
                 <button onClick={() => { setPasswordChangeMessage(''); setShowChangePasswordModal(true); setShowProfileDropdown(false); setPasswordForm({ currentPassword: '', newPassword: '' }); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">
                   Change Password
                 </button>
-                <button onClick={() => { setView('login'); setIsAdmin(false); setMessage(''); setLoginForm({ email: '', password: '' }); setShowProfileDropdown(false); setUserProfile(null); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">
+                <button onClick={handleLogout} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left">
                   Logout
                 </button>
               </div>
@@ -1306,24 +1364,51 @@ const App = () => {
                     </div>
                   </div>
 
-                  <div className="mt-6 flex flex-col sm:flex-row items-center space-y-4 sm:space-y-0 sm:space-x-4">
+                  <div className="mt-6 flex flex-wrap items-center space-y-4 sm:space-y-0 sm:space-x-4">
                     <input
                       type="text"
                       placeholder="Search users..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      className="w-full sm:w-1/2 p-3 rounded-lg bg-gray-100 border border-gray-300"
+                      className="w-full sm:w-auto p-3 rounded-lg bg-gray-100 border border-gray-300"
                     />
                     <select
                       value={filterStatus}
                       onChange={(e) => setFilterStatus(e.target.value)}
                       className="w-full sm:w-auto p-3 rounded-lg bg-gray-100 border border-gray-300"
                     >
-                      <option value="all">All Users</option>
+                      <option value="all">All Statuses</option>
                       <option value="active">Active</option>
                       <option value="inactive">Inactive</option>
                       <option value="pending">Pending Approval</option>
                     </select>
+                     <select
+                      value={filterDomain}
+                      onChange={(e) => setFilterDomain(e.target.value)}
+                      className="w-full sm:w-auto p-3 rounded-lg bg-gray-100 border border-gray-300"
+                    >
+                      <option value="all">All Domains</option>
+                      {domains.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
+                    <select
+                      value={filterYear}
+                      onChange={(e) => setFilterYear(e.target.value)}
+                      className="w-full sm:w-auto p-3 rounded-lg bg-gray-100 border border-gray-300"
+                    >
+                      <option value="all">All Years</option>
+                      {years.map(y => <option key={y} value={y}>{y}</option>)}
+                    </select>
+                    <select
+                      value={filterPosition}
+                      onChange={(e) => setFilterPosition(e.target.value)}
+                      className="w-full sm:w-auto p-3 rounded-lg bg-gray-100 border border-gray-300"
+                    >
+                      <option value="all">All Positions</option>
+                      {positions.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                    <button onClick={downloadUsersCSV} className="w-full sm:w-auto py-2 px-6 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">
+                      Download CSV
+                    </button>
                   </div>
 
                   <h3 className="text-xl font-semibold text-gray-800 mt-6">All Members</h3>
@@ -1349,7 +1434,12 @@ const App = () => {
                           {filteredUsers.map(user => (
                             <tr key={user.id}>
                               <td className="px-6 py-4 whitespace-nowrap">
-                                {user.photo ? <img src={user.photo} alt={`${user.username}`} className="w-12 h-12 rounded-full object-cover" /> : <div className="w-12 h-12 rounded-full bg-gray-300 flex items-center justify-center text-lg font-bold">{user.username.charAt(0).toUpperCase()}</div>}
+                                <img 
+                                  src={user.photo || `https://placehold.co/48x48/2a7b6a/FFFFFF?text=${user.username.charAt(0).toUpperCase()}`} 
+                                  alt={`${user.username}`} 
+                                  className="w-12 h-12 rounded-full object-cover"
+                                  onError={(e) => { e.target.onerror = null; e.target.src=`https://placehold.co/48x48/2a7b6a/FFFFFF?text=${user.username.charAt(0).toUpperCase()}`; }}
+                                />
                               </td>
                               <td className="px-6 py-4 whitespace-nowrap">{user.username}</td>
                               <td className="px-6 py-4 whitespace-nowrap">{user.email}</td>
@@ -1502,7 +1592,7 @@ const App = () => {
                 <>
                   <div className="flex justify-between items-center mt-6">
                     <div className="flex space-x-4">
-                      <button onClick={() => { setModalMessage(''); const activeUsers = allUsers.filter(u => u.status === 'active').map(u => u.id); setEligibleUsers(activeUsers); setShowCreateSlot(true); }} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-full shadow-lg transition-colors">
+                      <button onClick={() => { setModalMessage(''); const activeUsers = allUsers.filter(u => u.status === 'active').map(u => u.id); setEligibleUsers(activeUsers); setEligibleUserSearch(''); setShowCreateSlot(true); }} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-full shadow-lg transition-colors">
                         Create Slot
                       </button>
                       <select
@@ -1686,8 +1776,11 @@ const App = () => {
 
       case 'login':
       default:
-        return (
+         return (
           <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+             {!isAuthReady ? (
+               <div>Loading...</div>
+             ) : (
             <div className="w-full max-w-sm bg-white rounded-lg shadow-xl p-8 space-y-6">
               <h2 className="text-2xl font-bold text-center text-gray-800">Login</h2>
               {message && (
@@ -1707,6 +1800,7 @@ const App = () => {
                 </div>
               </form>
             </div>
+             )}
           </div>
         );
     }
@@ -1721,6 +1815,7 @@ const App = () => {
               src="https://imgpx.com/WAerOknABX2d.jpg" 
               alt="MDC Team" 
               className="w-full h-auto rounded-2xl shadow-2xl object-cover mb-8"
+              onError={(e) => { e.target.onerror = null; e.target.src='https://placehold.co/800x600/1e5a4f/FFFFFF?text=MDC+Team+Photo'; }}
             />
             <h1 className="text-5xl font-bold">My-MDC</h1>
             <p className="mt-4 text-center">Your unified portal for attendance and member management.</p>
@@ -1823,7 +1918,7 @@ const App = () => {
               </div>
 
               <div className="flex justify-end space-x-4 mt-4 pt-4 border-t">
-                <button type="button" onClick={() => { setShowCreateSlot(false); setEditingSlot(null); setEligibleUsers([]); }} className="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Cancel</button>
+                <button type="button" onClick={() => { setShowCreateSlot(false); setEditingSlot(null); setEligibleUsers([]); setEligibleUserSearch(''); }} className="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Cancel</button>
                 <button type="submit" className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">{editingSlot ? 'Save Changes' : 'Create'}</button>
               </div>
             </form>
@@ -2125,4 +2220,5 @@ const App = () => {
 };
 
 export default App;
+
 
