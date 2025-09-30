@@ -87,7 +87,19 @@ const App = () => {
 
   const appId = firebaseConfig.appId;
 
-  // Domain and Position dropdown options
+  // Domain and Position dropdown options (custom order for display)
+  const domainPriority = ["EB", "DataVerse", "WebArcs", "CP", "Content", "Design", "PR", "Photography"];
+  const yearPriority = ["4th year", "3rd year", "2nd year", "1st year"];
+  const positionPriority = [
+    "President",
+    "Vice President",
+    "Secretary",
+    "Head of Operations",
+    "Technical Head",
+    "Creative Head",
+    "Domain Lead",
+    "Member"
+  ];
   const domains = ["WebArcs", "DataVerse", "CP", "Content", "Design", "PR", "Photography", "EB"];
   const positions = ["President", "Vice President", "Secretary", "Head of Operations", "Technical Head", "Creative Head", "Domain Lead", "Member"];
   const years = ["1st year", "2nd year", "3rd year", "4th year"];
@@ -541,6 +553,32 @@ const App = () => {
   const inactiveUsersCount = allUsers.filter(user => user.status === 'inactive').length;
   const pendingUsersCount = allUsers.filter(user => user.status === 'pending').length;
 
+  // Custom sort function for users
+  function userSort(a, b) {
+    // 1. Domain priority
+    const domainA = domainPriority.indexOf(a.domain);
+    const domainB = domainPriority.indexOf(b.domain);
+    if (domainA !== domainB) return domainA - domainB;
+    // 2. For EB domain, sort by position
+    if (a.domain === "EB" && b.domain === "EB") {
+      const posA = positionPriority.indexOf(a.position);
+      const posB = positionPriority.indexOf(b.position);
+      if (posA !== posB) return posA - posB;
+      // fallback: alphabetical by name
+      return (a.username || '').localeCompare(b.username || '');
+    }
+    // 3. For other domains, sort by year then regNo
+    const yearA = yearPriority.indexOf(a.year);
+    const yearB = yearPriority.indexOf(b.year);
+    if (yearA !== yearB) return yearA - yearB;
+    const regA = a.regNo || '';
+    const regB = b.regNo || '';
+    const numA = parseInt(regA, 10);
+    const numB = parseInt(regB, 10);
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    return regA.localeCompare(regB);
+  }
+
   // Filter and search logic
   const filteredUsers = allUsers.filter(user => {
     const matchesSearch = searchTerm === '' ||
@@ -553,7 +591,7 @@ const App = () => {
     const matchesPosition = filterPosition === 'all' || user.position === filterPosition;
 
     return matchesSearch && matchesStatus && matchesDomain && matchesYear && matchesPosition;
-  });
+  }).sort(userSort);
   
   const downloadUsersCSV = () => {
     const header = ['Full Name', 'Email', 'Contact', 'Year', 'Reg No', 'Program', 'Domain', 'Position', 'Status'];
@@ -1308,7 +1346,7 @@ const App = () => {
                         {allUsers.filter(user => user.status === 'active' &&
                           (dashboardFilterDomain === 'all' || user.domain === dashboardFilterDomain) &&
                           (dashboardFilterPosition === 'all' || user.position === dashboardFilterPosition)
-                        ).map(user => {
+                        ).sort(userSort).map(user => {
                           const overallPercentage = parseFloat(getAttendancePercentage(user.id, 'all'));
                           const matchesAttendanceFilter = dashboardFilterAttendance === 'all' || 
                             (dashboardFilterAttendance === '0-25' && overallPercentage >= 0 && overallPercentage <= 25) ||
@@ -1543,7 +1581,7 @@ const App = () => {
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
                           {filteredAttendanceList.length > 0 ? (
-                            filteredAttendanceList.map(user => (
+                            filteredAttendanceList.slice().sort(userSort).map(user => (
                               <tr key={user.id}>
                                 <td className="px-6 py-4 whitespace-nowrap">{user.username}</td>
                                 <td className="px-6 py-4 whitespace-nowrap">
