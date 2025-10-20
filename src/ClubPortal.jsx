@@ -894,7 +894,16 @@ const App = () => {
     const relevantSlots = attendanceSlots.filter(slot => {
         if (!slot.attendance || slot.attendance.length === 0) return false;
         const normalizedSlotTypeFromData = normalizeSlotType(slot.slotType);
-        return (normalizedSlotTypeFromData === type || type === 'all') && slot.attendance.some(a => a.userId === userId);
+        if (!(normalizedSlotTypeFromData === type || type === 'all')) return false;
+        // Only count this slot for the user if the slot's attendance contains the user AND
+        // the user was eligible for the slot (if eligibleUserIds exists and is non-empty).
+        const hasAttendanceRecord = slot.attendance.some(a => a.userId === userId);
+        if (!hasAttendanceRecord) return false;
+        if (slot.eligibleUserIds && slot.eligibleUserIds.length > 0) {
+          return slot.eligibleUserIds.includes(userId);
+        }
+        // If no eligibleUserIds set on slot, fall back to using attendance records (legacy)
+        return true;
     });
 
     const attendedSessions = relevantSlots.filter(slot =>
@@ -910,7 +919,13 @@ const App = () => {
     const relevantSlots = attendanceSlots.filter(slot => {
         if (!slot.attendance || slot.attendance.length === 0) return false;
         const normalizedSlotTypeFromData = normalizeSlotType(slot.slotType);
-        return (normalizedSlotTypeFromData === type || type === 'all') && slot.attendance.some(a => a.userId === userId);
+        if (!(normalizedSlotTypeFromData === type || type === 'all')) return false;
+        const hasAttendanceRecord = slot.attendance.some(a => a.userId === userId);
+        if (!hasAttendanceRecord) return false;
+        if (slot.eligibleUserIds && slot.eligibleUserIds.length > 0) {
+          return slot.eligibleUserIds.includes(userId);
+        }
+        return true;
     });
     
     const attendedSessions = relevantSlots.filter(slot =>
@@ -929,14 +944,35 @@ const App = () => {
     if (activeUsers.length === 0 || attendanceSlots.length === 0) {
       return '0.0%';
     }
-  
+
+    const activeUserIds = new Set(activeUsers.map(u => u.id));
+
+    // Count total present only for users who were eligible for that slot (or if slot has no eligible list, respect attendance records)
     const totalPresent = attendanceSlots.reduce((total, slot) => {
-      return total + slot.attendance.filter(a => a.isPresent).length;
+      if (!slot.attendance || slot.attendance.length === 0) return total;
+      const presentCount = slot.attendance.filter(a => {
+        if (!a.isPresent) return false;
+        if (slot.eligibleUserIds && slot.eligibleUserIds.length > 0) {
+          return slot.eligibleUserIds.includes(a.userId) && activeUserIds.has(a.userId);
+        }
+        return activeUserIds.has(a.userId);
+      }).length;
+      return total + presentCount;
     }, 0);
-  
-    const totalPossibleAttendance = activeUsers.length * attendanceSlots.length;
+
+    // Calculate total possible attendance by summing eligible (and active) users per slot
+    const totalPossibleAttendance = attendanceSlots.reduce((total, slot) => {
+      if (slot.eligibleUserIds && slot.eligibleUserIds.length > 0) {
+        // Count only active eligible users
+        const activeEligible = slot.eligibleUserIds.filter(id => activeUserIds.has(id)).length;
+        return total + activeEligible;
+      }
+      // If no eligible list, every active user was potentially counted
+      return total + activeUsers.length;
+    }, 0);
+
     if (totalPossibleAttendance === 0) return '0.0%';
-  
+
     const averageRate = (totalPresent / totalPossibleAttendance) * 100;
     return `${averageRate.toFixed(1)}%`;
   };
