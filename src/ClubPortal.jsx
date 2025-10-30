@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, deleteUser, updatePassword } from 'firebase/auth';
@@ -1018,6 +1019,43 @@ const App = () => {
     link.click();
     document.body.removeChild(link);
   };
+
+  const handleDownloadMemberAttendance = (member) => {
+    if (!member) return;
+    // Use the already-computed memberAttendanceDetails filtered by selectedMember
+    const rowsData = attendanceSlots.filter(slot =>
+      slot.attendance.some(a => a.userId === member.id) &&
+      (dashboardFilterMonth === 'all' || new Date(slot.date).getMonth().toString() === dashboardFilterMonth) &&
+      (dashboardFilterYear === 'all' || new Date(slot.date).getFullYear().toString() === dashboardFilterYear)
+    ).map(slot => {
+      const attendanceRecord = slot.attendance.find(a => a.userId === member.id);
+      return {
+        slotName: slot.slotName,
+        slotType: slotTypesMap[normalizeSlotType(slot.slotType)] || slot.slotType,
+        date: formatDate(slot.date),
+        timings: slot.timings,
+        status: attendanceRecord ? (attendanceRecord.isPresent ? 'Present' : 'Absent') : 'Absent'
+      };
+    }).sort((a,b) => {
+      // sort by original date asc using parsed date from dd-mm-yyyy
+      const parseDDMMYYYY = (s) => {
+        const [d,m,y] = s.split('-'); return new Date(`${y}-${m}-${d}`);
+      };
+      return parseDDMMYYYY(a.date) - parseDDMMYYYY(b.date);
+    });
+
+    const header = ['Slot Name', 'Slot Type', 'Date', 'Timings', 'Status'];
+    const rows = rowsData.map(r => [r.slotName, r.slotType, r.date, r.timings, r.status].map(cell => `"${String(cell).replace(/"/g,'""')}"`).join(','));
+    const csvContent = [header.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${member.username.replace(/\s+/g,'_')}_attendance.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
   
   const handleViewMemberDetails = (member) => {
     setModalMessage('');
@@ -1710,13 +1748,19 @@ const App = () => {
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                               <div className="flex flex-col">
                                 <span className="uppercase text-xs font-medium text-gray-500">Status</span>
-                                <div className="mt-2 flex items-center space-x-2">
-                                  <button onClick={markAllPresent} aria-label="Mark all present" title="Mark all Present" className="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center shadow-sm">
-                                    <span className="sr-only">Mark all Present</span>
-                                  </button>
-                                  <button onClick={markAllAbsent} aria-label="Mark all absent" title="Mark all Absent" className="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center shadow-sm">
-                                    <span className="sr-only">Mark all Absent</span>
-                                  </button>
+                                <div className="mt-2 flex items-center space-x-4">
+                                  <label className="inline-flex items-center space-x-2 cursor-pointer">
+                                    <button onClick={markAllPresent} aria-label="Mark all present" title="Mark all Present" className="bulk-circle present">
+                                      <span className="bulk-dot" aria-hidden="true"></span>
+                                    </button>
+                                    <span className="text-sm text-gray-700 capitalize">All Present</span>
+                                  </label>
+                                  <label className="inline-flex items-center space-x-2 cursor-pointer">
+                                    <button onClick={markAllAbsent} aria-label="Mark all absent" title="Mark all Absent" className="bulk-circle absent">
+                                      <span className="bulk-dot" aria-hidden="true"></span>
+                                    </button>
+                                    <span className="text-sm text-gray-700 capitalize">All Absent</span>
+                                  </label>
                                 </div>
                               </div>
                             </th>
@@ -2219,11 +2263,16 @@ const App = () => {
               <h3 className="text-xl font-bold">
                 {selectedMember.username}'s Attendance Details
               </h3>
-              <button onClick={() => setShowMemberAttendanceDetails(false)} className="text-gray-500 hover:text-gray-700">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <div className="flex items-center space-x-2">
+                <button onClick={() => handleDownloadMemberAttendance(selectedMember)} className="py-1 px-3 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-md text-sm border">
+                  Download CSV
+                </button>
+                <button onClick={() => setShowMemberAttendanceDetails(false)} className="text-gray-500 hover:text-gray-700">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
             
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -2447,6 +2496,4 @@ const App = () => {
 };
 
 export default App;
-
-
 
