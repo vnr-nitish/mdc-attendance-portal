@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, deleteUser, updatePassword } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot, query, where, updateDoc, doc, deleteDoc, getDocs, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
@@ -50,6 +51,9 @@ const App = () => {
   const [attendanceSearchTerm, setAttendanceSearchTerm] = useState('');
   const [attendanceFilterDomain, setAttendanceFilterDomain] = useState('all');
   const [attendanceFilterPosition, setAttendanceFilterPosition] = useState('all');
+  const previousSlotAttendanceRef = useRef(null);
+  const [showUndoToast, setShowUndoToast] = useState(false);
+  const undoTimerRef = useRef(null);
   const [slotTypeFilter, setSlotTypeFilter] = useState('all');
   const [slotMonthFilter, setSlotMonthFilter] = useState('all');
   const [slotYearFilter, setSlotYearFilter] = useState('all');
@@ -59,6 +63,8 @@ const App = () => {
   // State for Dashboard
   const [showMemberAttendanceDetails, setShowMemberAttendanceDetails] = useState(false);
   const [selectedMember, setSelectedMember] = useState(null);
+  const [showViolationModal, setShowViolationModal] = useState(false);
+  const [violationModalMember, setViolationModalMember] = useState(null);
   const [dashboardFilterMonth, setDashboardFilterMonth] = useState('all');
   const [dashboardFilterYear, setDashboardFilterYear] = useState('all');
   const [dashboardFilterDomain, setDashboardFilterDomain] = useState('all');
@@ -753,6 +759,40 @@ const App = () => {
     );
   };
 
+  // Bulk apply present/absent to either visible rows (filtered) or all eligible rows
+  const applyBulk = (isPresent) => {
+    if (!markingAttendanceForSlot) return;
+    // capture previous state for undo
+    previousSlotAttendanceRef.current = slotAttendance.map(u => ({ id: u.id, isPresent: u.isPresent }));
+
+  // apply to all current slotAttendance rows (these are the eligible users for the slot)
+  const targetIds = slotAttendance.map(u => u.id);
+
+    setSlotAttendance(prev => prev.map(u => targetIds.includes(u.id) ? { ...u, isPresent } : u));
+
+    // show undo toast for 6 seconds
+    setShowUndoToast(true);
+    if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = setTimeout(() => {
+      setShowUndoToast(false);
+      previousSlotAttendanceRef.current = null;
+    }, 6000);
+  };
+
+  const markAllPresent = () => applyBulk(true);
+  const markAllAbsent = () => applyBulk(false);
+
+  const undoBulk = () => {
+    if (!previousSlotAttendanceRef.current) return;
+    setSlotAttendance(prev => prev.map(u => {
+      const prevRec = previousSlotAttendanceRef.current.find(p => p.id === u.id);
+      return prevRec ? { ...u, isPresent: prevRec.isPresent } : u;
+    }));
+    previousSlotAttendanceRef.current = null;
+    setShowUndoToast(false);
+    if (undoTimerRef.current) { clearTimeout(undoTimerRef.current); undoTimerRef.current = null; }
+  };
+
   const handleSaveAttendance = async () => {
     if (!db || !isAdmin || !markingAttendanceForSlot) return;
     try {
@@ -894,16 +934,7 @@ const App = () => {
     const relevantSlots = attendanceSlots.filter(slot => {
         if (!slot.attendance || slot.attendance.length === 0) return false;
         const normalizedSlotTypeFromData = normalizeSlotType(slot.slotType);
-        if (!(normalizedSlotTypeFromData === type || type === 'all')) return false;
-        // Only count this slot for the user if the slot's attendance contains the user AND
-        // the user was eligible for the slot (if eligibleUserIds exists and is non-empty).
-        const hasAttendanceRecord = slot.attendance.some(a => a.userId === userId);
-        if (!hasAttendanceRecord) return false;
-        if (slot.eligibleUserIds && slot.eligibleUserIds.length > 0) {
-          return slot.eligibleUserIds.includes(userId);
-        }
-        // If no eligibleUserIds set on slot, fall back to using attendance records (legacy)
-        return true;
+        return (normalizedSlotTypeFromData === type || type === 'all') && slot.attendance.some(a => a.userId === userId);
     });
 
     const attendedSessions = relevantSlots.filter(slot =>
@@ -919,13 +950,7 @@ const App = () => {
     const relevantSlots = attendanceSlots.filter(slot => {
         if (!slot.attendance || slot.attendance.length === 0) return false;
         const normalizedSlotTypeFromData = normalizeSlotType(slot.slotType);
-        if (!(normalizedSlotTypeFromData === type || type === 'all')) return false;
-        const hasAttendanceRecord = slot.attendance.some(a => a.userId === userId);
-        if (!hasAttendanceRecord) return false;
-        if (slot.eligibleUserIds && slot.eligibleUserIds.length > 0) {
-          return slot.eligibleUserIds.includes(userId);
-        }
-        return true;
+        return (normalizedSlotTypeFromData === type || type === 'all') && slot.attendance.some(a => a.userId === userId);
     });
     
     const attendedSessions = relevantSlots.filter(slot =>
@@ -944,35 +969,14 @@ const App = () => {
     if (activeUsers.length === 0 || attendanceSlots.length === 0) {
       return '0.0%';
     }
-
-    const activeUserIds = new Set(activeUsers.map(u => u.id));
-
-    // Count total present only for users who were eligible for that slot (or if slot has no eligible list, respect attendance records)
+  
     const totalPresent = attendanceSlots.reduce((total, slot) => {
-      if (!slot.attendance || slot.attendance.length === 0) return total;
-      const presentCount = slot.attendance.filter(a => {
-        if (!a.isPresent) return false;
-        if (slot.eligibleUserIds && slot.eligibleUserIds.length > 0) {
-          return slot.eligibleUserIds.includes(a.userId) && activeUserIds.has(a.userId);
-        }
-        return activeUserIds.has(a.userId);
-      }).length;
-      return total + presentCount;
+      return total + slot.attendance.filter(a => a.isPresent).length;
     }, 0);
-
-    // Calculate total possible attendance by summing eligible (and active) users per slot
-    const totalPossibleAttendance = attendanceSlots.reduce((total, slot) => {
-      if (slot.eligibleUserIds && slot.eligibleUserIds.length > 0) {
-        // Count only active eligible users
-        const activeEligible = slot.eligibleUserIds.filter(id => activeUserIds.has(id)).length;
-        return total + activeEligible;
-      }
-      // If no eligible list, every active user was potentially counted
-      return total + activeUsers.length;
-    }, 0);
-
+  
+    const totalPossibleAttendance = activeUsers.length * attendanceSlots.length;
     if (totalPossibleAttendance === 0) return '0.0%';
-
+  
     const averageRate = (totalPresent / totalPossibleAttendance) * 100;
     return `${averageRate.toFixed(1)}%`;
   };
@@ -1025,7 +1029,7 @@ const App = () => {
     slot.attendance.some(a => a.userId === selectedMember.id) &&
     (dashboardFilterMonth === 'all' || new Date(slot.date).getMonth().toString() === dashboardFilterMonth) &&
     (dashboardFilterYear === 'all' || new Date(slot.date).getFullYear().toString() === dashboardFilterYear)
-  ).map(slot => {
+  ).sort((a,b) => new Date(a.date) - new Date(b.date)).map(slot => {
     const attendanceRecord = slot.attendance.find(a => a.userId === selectedMember.id);
     return {
       ...slot,
@@ -1161,6 +1165,79 @@ const App = () => {
     const remainingSeconds = seconds % 60;
     return `${String(minutes).padStart(2, '0')}m : ${String(remainingSeconds).padStart(2, '0')}s`;
   };
+
+  // Format ISO-ish date strings (YYYY-MM-DD or full ISO) to DD-MM-YYYY for display
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '';
+    // If already in YYYY-MM-DD, split
+    if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(dateStr)) {
+      const [y, m, d] = dateStr.split('-');
+      return `${d.padStart(2,'0')}-${m.padStart(2,'0')}-${y}`;
+    }
+    // Try parsing other date formats
+    const dt = new Date(dateStr);
+    if (isNaN(dt)) return dateStr;
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const yyyy = dt.getFullYear();
+    return `${dd}-${mm}-${yyyy}`;
+  };
+
+  // Compute consecutive-absence violations for a given user
+  // Sliding window of size 3 on relevant (eligible) slots sorted by date ascending
+  const computeConsecutiveAbsenceViolationsForUser = (userId, slots) => {
+    if (!userId || !Array.isArray(slots) || slots.length === 0) {
+      return { violationCount: 0, violations: [] };
+    }
+
+    const relevantSlots = slots
+      .slice()
+      .sort((a, b) => new Date(a.date) - new Date(b.date))
+      .filter(slot => {
+        if (!slot) return false;
+        const hasEligibleList = Array.isArray(slot.eligibleUserIds) && slot.eligibleUserIds.length > 0;
+        if (hasEligibleList) return slot.eligibleUserIds.includes(userId);
+        // legacy: include if attendance entry exists for user
+        return Array.isArray(slot.attendance) && slot.attendance.some(a => a.userId === userId);
+      });
+
+    const statusArr = relevantSlots.map(slot => {
+      const rec = Array.isArray(slot.attendance) ? slot.attendance.find(a => a.userId === userId) : null;
+      const hasEligibleList = Array.isArray(slot.eligibleUserIds) && slot.eligibleUserIds.length > 0;
+      const isPresent = rec ? !!rec.isPresent : (hasEligibleList ? false : false);
+      return {
+        slotId: slot.id,
+        date: slot.date,
+        slotName: slot.slotName || '',
+        isPresent
+      };
+    });
+
+    const violations = [];
+    for (let i = 0; i <= statusArr.length - 3; i++) {
+      const window = statusArr.slice(i, i + 3);
+      if (window.every(s => !s.isPresent)) {
+        violations.push({
+          slotIds: window.map(w => w.slotId),
+          dates: window.map(w => formatDate(w.date)),
+          slotNames: window.map(w => w.slotName)
+        });
+      }
+    }
+
+    return { violationCount: violations.length, violations };
+  };
+
+  // Memoize violations map for performance (recompute when users or slots change)
+  const violationsMap = useMemo(() => {
+    const map = {};
+    if (!Array.isArray(allUsers) || !Array.isArray(attendanceSlots)) return map;
+    allUsers.forEach(user => {
+      if (!user || user.status !== 'active') return; // only consider active members
+      map[user.id] = computeConsecutiveAbsenceViolationsForUser(user.id, attendanceSlots);
+    });
+    return map;
+  }, [allUsers, attendanceSlots]);
 
   
   // Nav bar and main content
@@ -1375,6 +1452,7 @@ const App = () => {
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Events (%)</th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Core Team (%)</th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Domain M. (%)</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Violation</th>
                           <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Details</th>
                         </tr>
                       </thead>
@@ -1401,6 +1479,20 @@ const App = () => {
                               <td className="px-6 py-4 whitespace-nowrap">{getAttendancePercentage(user.id, 'event')}</td>
                               <td className="px-6 py-4 whitespace-nowrap">{getAttendancePercentage(user.id, 'coreteammeeting')}</td>
                               <td className="px-6 py-4 whitespace-nowrap">{getAttendancePercentage(user.id, 'domainmeeting')}</td>
+                              <td className="px-6 py-4 whitespace-nowrap">
+                                {(() => {
+                                  const v = violationsMap[user.id] || { violationCount: 0, violations: [] };
+                                  if (v.violationCount === 0) {
+                                    return <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">No</span>;
+                                  }
+                                  return (
+                                    <div className="flex items-center space-x-2">
+                                      <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Yes</span>
+                                      <button onClick={() => { setViolationModalMember(user); setShowViolationModal(true); }} className="text-sm font-semibold text-red-600">({v.violationCount})</button>
+                                    </div>
+                                  );
+                                })()}
+                              </td>
                               <td className="px-6 py-4 whitespace-nowrap">
                                 <button onClick={() => handleViewMemberDetails(user)}>
                                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6 text-gray-600">
@@ -1567,11 +1659,14 @@ const App = () => {
                     <div className="flex justify-between items-center">
                       <h2 className="text-2xl font-bold text-gray-800">Mark Attendance for {markingAttendanceForSlot.slotName}</h2>
                       <div className="flex space-x-2">
-                        <button onClick={handleExportAttendance} className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-full shadow-lg transition-colors">Export to CSV</button>
-                        <button onClick={() => { setModalMessage(''); setShowImportModal(true); }} className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">Import from CSV</button>
-                        <button onClick={() => setMarkingAttendanceForSlot(null)} className="py-2 px-6 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full shadow-lg transition-colors">
-                          Back to Slots
-                        </button>
+                          <button onClick={handleExportAttendance} className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-full shadow-lg transition-colors">Export to CSV</button>
+                          <button onClick={() => { setModalMessage(''); setShowImportModal(true); }} className="py-2 px-4 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">Import from CSV</button>
+
+                          {/* Bulk scope and buttons removed per UI change; small quick-controls are in the table header under 'Status' */}
+
+                          <button onClick={() => setMarkingAttendanceForSlot(null)} className="py-2 px-6 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full shadow-lg transition-colors">
+                            Back to Slots
+                          </button>
                       </div>
                     </div>
 
@@ -1612,7 +1707,19 @@ const App = () => {
                         <thead className="bg-gray-50">
                           <tr>
                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Full Name</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                              <div className="flex flex-col">
+                                <span className="uppercase text-xs font-medium text-gray-500">Status</span>
+                                <div className="mt-2 flex items-center space-x-2">
+                                  <button onClick={markAllPresent} aria-label="Mark all present" title="Mark all Present" className="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center shadow-sm">
+                                    <span className="sr-only">Mark all Present</span>
+                                  </button>
+                                  <button onClick={markAllAbsent} aria-label="Mark all absent" title="Mark all Absent" className="w-6 h-6 rounded-full bg-red-600 flex items-center justify-center shadow-sm">
+                                    <span className="sr-only">Mark all Absent</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </th>
                           </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
@@ -1622,25 +1729,25 @@ const App = () => {
                                 <td className="px-6 py-4 whitespace-nowrap">{user.username}</td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                   <label className="inline-flex items-center space-x-2">
-                                    <input
-                                      type="radio"
-                                      name={`status-${user.id}`}
-                                      value="present"
-                                      checked={user.isPresent}
-                                      onChange={() => handleToggleAttendance(user.id, true)}
-                                      className="form-radio text-green-600"
-                                    />
+                                      <input
+                                        type="radio"
+                                        name={`status-${user.id}`}
+                                        value="present"
+                                        checked={user.isPresent}
+                                        onChange={() => handleToggleAttendance(user.id, true)}
+                                        className="custom-radio custom-radio-green"
+                                      />
                                     <span>Present</span>
                                   </label>
                                   <label className="inline-flex items-center ml-4 space-x-2">
                                     <input
-                                      type="radio"
-                                      name={`status-${user.id}`}
-                                      value="absent"
-                                      checked={!user.isPresent}
-                                      onChange={() => handleToggleAttendance(user.id, false)}
-                                      className="form-radio text-red-600"
-                                    />
+                                        type="radio"
+                                        name={`status-${user.id}`}
+                                        value="absent"
+                                        checked={!user.isPresent}
+                                        onChange={() => handleToggleAttendance(user.id, false)}
+                                        className="custom-radio custom-radio-red"
+                                      />
                                     <span>Absent</span>
                                   </label>
                                 </td>
@@ -1661,6 +1768,14 @@ const App = () => {
                         Save Attendance
                       </button>
                     </div>
+                    {showUndoToast && (
+                      <div className="fixed bottom-6 right-6 z-50">
+                        <div className="bg-gray-900 text-white px-4 py-2 rounded-lg shadow-lg flex items-center space-x-4">
+                          <span>Bulk change applied</span>
+                          <button onClick={undoBulk} className="underline text-sm">Undo</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                 <>
@@ -1716,15 +1831,15 @@ const App = () => {
                           </tr>
                         </thead>
                         <tbody className="bg-white divide-y divide-gray-200">
-                          {attendanceSlots.filter(slot => 
+                          {[...attendanceSlots.filter(slot => 
                             (slotTypeFilter === 'all' || slot.slotType === slotTypeFilter) &&
                             (slotMonthFilter === 'all' || new Date(slot.date).getMonth().toString() === slotMonthFilter) &&
                             (slotYearFilter === 'all' || new Date(slot.date).getFullYear().toString() === slotYearFilter)
-                          ).map(slot => (
+                          )].sort((a,b) => new Date(a.date) - new Date(b.date)).map(slot => (
                             <tr key={slot.id}>
                               <td className="px-6 py-4 whitespace-nowrap">{slot.slotName}</td>
                               <td className="px-6 py-4 whitespace-nowrap">{slot.slotType}</td>
-                              <td className="px-6 py-4 whitespace-nowrap">{slot.date}</td>
+                              <td className="px-6 py-4 whitespace-nowrap">{formatDate(slot.date)}</td>
                               <td className="px-6 py-4 whitespace-nowrap">{slot.venue}</td>
                               <td className="px-6 py-4 whitespace-nowrap">{slot.timings}</td>
                               <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
@@ -1830,7 +1945,7 @@ const App = () => {
                           <tr key={slot.id}>
                             <td className="px-6 py-4 whitespace-nowrap">{slot.slotName}</td>
                             <td className="px-6 py-4 whitespace-nowrap">{slotTypesMap[normalizeSlotType(slot.slotType)] || slot.slotType}</td>
-                            <td className="px-6 py-4 whitespace-nowrap">{slot.date}</td>
+                            <td className="px-6 py-4 whitespace-nowrap">{formatDate(slot.date)}</td>
                             <td className="px-6 py-4 whitespace-nowrap">{slot.timings}</td>
                             <td className="px-6 py-4 whitespace-nowrap">
                               <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${slot.attendance.find(a => a.userId === userProfile.id)?.isPresent ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
@@ -2158,7 +2273,7 @@ const App = () => {
                   {memberAttendanceDetails.map(slot => (
                     <tr key={slot.id}>
                       <td className="px-6 py-4 whitespace-nowrap">{slot.slotName}</td>
-                      <td className="px-6 py-4 whitespace-nowrap">{slot.date}</td>
+                      <td className="px-6 py-4 whitespace-nowrap">{formatDate(slot.date)}</td>
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${slot.isPresent ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
                           {slot.isPresent ? 'Present' : 'Absent'}
@@ -2170,6 +2285,44 @@ const App = () => {
               </table>
             </div>
             
+          </div>
+        </div>
+      )}
+
+      {showViolationModal && violationModalMember && (
+        <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-3xl max-h-screen overflow-y-auto space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-xl font-bold">
+                {violationModalMember.username}'s Violation Details
+              </h3>
+              <button onClick={() => { setShowViolationModal(false); setViolationModalMember(null); }} className="text-gray-500 hover:text-gray-700">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {(() => {
+                const v = violationsMap[violationModalMember.id] || { violationCount: 0, violations: [] };
+                if (v.violationCount === 0) return <p className="text-gray-600">No violations found for this member.</p>;
+                return (
+                  <div className="space-y-3">
+                    <p className="text-sm text-gray-600">Total violations: <span className="font-semibold text-red-600">{v.violationCount}</span></p>
+                    <div className="space-y-2">
+                      {v.violations.map((grp, idx) => (
+                        <div key={idx} className="p-3 border rounded-lg bg-red-50">
+                          <p className="text-sm font-semibold">Violation #{idx + 1}</p>
+                          <p className="text-sm">Slots: {grp.slotNames.join(' • ')}</p>
+                          <p className="text-sm text-gray-600">Dates: {grp.dates.join(' → ')}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </div>
       )}
@@ -2294,5 +2447,6 @@ const App = () => {
 };
 
 export default App;
+
 
 

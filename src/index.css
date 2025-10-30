@@ -1,3 +1,233 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* UI improvements: subtle hover effects, consistent button styles and table row hover
+	 These are purely visual and do not change any behavior or functionality. */
+@layer components {
+	.btn-common {
+		@apply rounded-full font-semibold transition-transform transition-colors duration-200 ease-in-out;
+	}
+	.btn-primary {
+		@apply btn-common bg-green-600 text-white hover:bg-green-700 hover:scale-105 shadow-md;
+	}
+	.btn-secondary {
+		@apply btn-common bg-gray-200 text-gray-800 hover:bg-gray-300 hover:scale-105;
+	}
+	.card {
+		@apply bg-white rounded-xl shadow-md p-4 transition-shadow duration-200 ease-in-out;
+	}
+	.card:hover {
+		@apply shadow-2xl;
+	}
+}
+
+/* Table row hover and focus styles */
+tbody tr {
+	transition: background-color 150ms ease-in-out, transform 150ms ease-in-out;
+}
+tbody tr:hover {
+	background-color: rgba(34,197,94,0.06); /* subtle green tint */
+}
+tbody tr:focus-within {
+	background-color: rgba(59,130,246,0.06);
+}
+
+/* Improve default button appearance across the app (non-intrusive) */
+button {
+	transition: box-shadow 150ms ease-in-out, transform 150ms ease-in-out;
+}
+button:focus {
+	outline: none;
+	box-shadow: 0 0 0 4px rgba(34,197,94,0.12);
+}
+
+/* Inputs and selects focus */
+input:focus, select:focus, textarea:focus {
+	outline: none;
+	box-shadow: 0 0 0 4px rgba(79,70,229,0.08);
+	border-color: rgba(79,70,229,0.5);
+}
+
+/* Make interactive icons clearer */
+.interactive-icon {
+	@apply transition-transform duration-150 ease-in-out;
+}
+.interactive-icon:hover {
+	@apply scale-110 text-green-600;
+}
+
+/* Slightly lift top navigation for better depth */
+.nav-elevated {
+	@apply shadow-lg;
+}
+
+/* Improve placeholder images contrast */
+.placeholder-img {
+	background-color: #2a7b6a;
+	color: #fff;
+}
+
+/* Auth panel and inputs */
+.auth-card {
+	@apply bg-white/90 backdrop-blur-sm rounded-3xl shadow-2xl p-8 max-w-lg mx-auto;
+	border: 1px solid rgba(0,0,0,0.06);
+}
+.auth-panel {
+	background: linear-gradient(135deg, rgba(42,123,106,0.95) 0%, rgba(32,83,72,0.95) 100%);
+}
+.input-field {
+	@apply w-full p-3 rounded-full bg-gray-50 border border-gray-200 focus:bg-white;
+}
+
+/* Bulk action buttons in the attendance toolbar */
+.bulk-btn-green {
+	@apply bg-green-600 text-white rounded-full py-1 px-3 hover:bg-green-700;
+}
+.bulk-btn-red {
+	@apply bg-red-600 text-white rounded-full py-1 px-3 hover:bg-red-700;
+}
+
+/* Make register form expand instead of scroll in the auth card */
+.auth-card form {
+	max-height: none !important;
+	overflow: visible !important;
+}
+
+/* Make cards feel attached (reduce harsh box edges) */
+.table-card, .slot-card {
+	border: 1px solid rgba(0,0,0,0.04);
+}
+
+/* Auth card wrapper - allow smooth expand/collapse when switching between login/register without internal scrollbars */
+.auth-card-wrapper {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: max-height 350ms ease, padding 350ms ease;
+	overflow: hidden;
+}
+.auth-collapsed {
+	max-height: 560px; /* compact height for login */
+	padding-top: 1rem;
+	padding-bottom: 1rem;
+}
+.auth-expanded {
+	max-height: 2000px; /* large enough for all register fields */
+	padding-top: 2rem;
+	padding-bottom: 2rem;
+}
+
+.auth-card {
+	transition: transform 300ms ease, box-shadow 300ms ease;
+}
+.auth-card:active, .auth-card:focus-within {
+	transform: translateY(-4px);
+}
+
+/* Ensure radio accent fallbacks for browsers that support accent-color */
+.accent-green-600 {
+	accent-color: #16a34a; /* green-600 */
+}
+.accent-red-600 {
+	accent-color: #dc2626; /* red-600 */
+}
+
+/* Custom radio that only colors the bullet (not the label background) with a graceful fallback */
+.custom-radio {
+	/* remove default appearance to style the bullet */
+	-webkit-appearance: none;
+	-moz-appearance: none;
+	appearance: none;
+	width: 1.1rem;
+	height: 1.1rem;
+	border-radius: 9999px;
+	border: 2px solid rgba(0,0,0,0.12);
+	display: inline-block;
+	vertical-align: middle;
+	position: relative;
+	margin-right: 0.5rem;
+	background-clip: content-box;
+	background-color: #fff;
+}
+.custom-radio:focus {
+	outline: none;
+	box-shadow: 0 0 0 4px rgba(79,70,229,0.12);
+}
+.custom-radio::after {
+	content: '';
+	display: block;
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 9999px;
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%) scale(0);
+	transition: transform 150ms ease-in-out, background-color 150ms ease-in-out;
+}
+.custom-radio:checked::after {
+	transform: translate(-50%, -50%) scale(1);
+}
+.custom-radio-green:checked::after {
+	background-color: #16a34a; /* green-600 */
+}
+.custom-radio-red:checked::after {
+	background-color: #dc2626; /* red-600 */
+}
+
+/* For browsers that support accent-color, apply it as well to be safe */
+.custom-radio.custom-radio-green {
+	accent-color: #16a34a;
+}
+.custom-radio.custom-radio-red {
+	accent-color: #dc2626;
+}
+
+/* Small circular bulk control used in the Status header to mirror per-row radio bullets */
+.bulk-circle {
+	width: 1.1rem; /* close to custom radio size */
+	height: 1.1rem;
+	border-radius: 9999px;
+	border: 2px solid rgba(0,0,0,0.12);
+	background-color: #fff;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+}
+.bulk-circle:focus {
+	outline: none;
+	box-shadow: 0 0 0 4px rgba(79,70,229,0.08);
+}
+.bulk-circle .bulk-dot {
+	width: 0.5rem;
+	height: 0.5rem;
+	border-radius: 9999px;
+	transform: scale(1);
+}
+.bulk-circle.present .bulk-dot {
+	background-color: #16a34a; /* green-600 */
+}
+.bulk-circle.absent .bulk-dot {
+	background-color: #dc2626; /* red-600 */
+}
+
+/* Soften auth-card further: remove heavy white border and reduce shadow to avoid boxy feeling */
+.auth-card {
+	border: none !important;
+	box-shadow: 0 8px 20px rgba(10,25,41,0.06) !important;
+}
+
+/* Page content spacing so content feels attached to navbar */
+.content-container {
+	padding-top: 1.25rem; /* slightly larger gap under nav */
+}
+
+/* Slot cards and table container */
+.slot-card {
+	@apply bg-white rounded-xl shadow-md p-4 mb-4;
+}
+.table-card {
+	@apply bg-white rounded-xl shadow-md p-4 overflow-x-auto;
+}
