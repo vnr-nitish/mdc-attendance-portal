@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, deleteUser, updatePassword } from 'firebase/auth';
-import { getFirestore, collection, addDoc, onSnapshot, query, where, updateDoc, doc, deleteDoc, getDocs, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, onSnapshot, updateDoc, doc, deleteDoc, setDoc, serverTimestamp, getDoc } from 'firebase/firestore';
 
 const App = () => {
   // State for Firebase services and user information
@@ -83,14 +83,14 @@ const App = () => {
 
   
   // Your web app's Firebase configuration
-  const firebaseConfig = {
-  apiKey: "AIzaSyDcXyskaSXag5vebXR0BZtoFDZW1-BW5ZQ",
-  authDomain: "mdc-attendance-portal.firebaseapp.com",
-  projectId: "mdc-attendance-portal",
-  storageBucket: "mdc-attendance-portal.firebasestorage.app",
-  messagingSenderId: "68450083483",
-  appId: "1:68450083483:web:35aa3c2da24aba1a9fdc3e"
-  };
+  const firebaseConfig = useMemo(() => ({
+    apiKey: "AIzaSyDcXyskaSXag5vebXR0BZtoFDZW1-BW5ZQ",
+    authDomain: "mdc-attendance-portal.firebaseapp.com",
+    projectId: "mdc-attendance-portal",
+    storageBucket: "mdc-attendance-portal.firebasestorage.app",
+    messagingSenderId: "68450083483",
+    appId: "1:68450083483:web:35aa3c2da24aba1a9fdc3e"
+  }), []);
 
   const appId = firebaseConfig.appId;
 
@@ -158,7 +158,7 @@ const App = () => {
     });
 
     return () => unsubscribe();
-  }, [appId]);
+  }, [appId, firebaseConfig]);
 
   // Fetch all data from Firestore after login/auth is ready
   useEffect(() => {
@@ -1204,11 +1204,7 @@ const App = () => {
     };
   });
 
-  const getSlotTiming = (slot) => {
-    const startTime = slot.timings.split('-')[0].trim();
-    const endTime = slot.timings.split('-')[1].trim();
-    return `${startTime} - ${endTime}`;
-  };
+  // getSlotTiming was removed because it was defined but never used.
 
   const formatTime = (seconds) => {
     const minutes = Math.floor(seconds / 60);
@@ -1233,57 +1229,55 @@ const App = () => {
     return `${dd}-${mm}-${yyyy}`;
   };
 
-  // Compute consecutive-absence violations for a given user
-  // Sliding window of size 3 on relevant (eligible) slots sorted by date ascending
-  const computeConsecutiveAbsenceViolationsForUser = (userId, slots) => {
-    if (!userId || !Array.isArray(slots) || slots.length === 0) {
-      return { violationCount: 0, violations: [] };
-    }
-
-    const relevantSlots = slots
-      .slice()
-      .sort((a, b) => new Date(a.date) - new Date(b.date))
-      .filter(slot => {
-        if (!slot) return false;
-        const hasEligibleList = Array.isArray(slot.eligibleUserIds) && slot.eligibleUserIds.length > 0;
-        if (hasEligibleList) return slot.eligibleUserIds.includes(userId);
-        // legacy: include if attendance entry exists for user
-        return Array.isArray(slot.attendance) && slot.attendance.some(a => a.userId === userId);
-      });
-
-    const statusArr = relevantSlots.map(slot => {
-      const rec = Array.isArray(slot.attendance) ? slot.attendance.find(a => a.userId === userId) : null;
-      const hasEligibleList = Array.isArray(slot.eligibleUserIds) && slot.eligibleUserIds.length > 0;
-      const isPresent = rec ? !!rec.isPresent : (hasEligibleList ? false : false);
-      return {
-        slotId: slot.id,
-        date: slot.date,
-        slotName: slot.slotName || '',
-        isPresent
-      };
-    });
-
-    const violations = [];
-    for (let i = 0; i <= statusArr.length - 3; i++) {
-      const window = statusArr.slice(i, i + 3);
-      if (window.every(s => !s.isPresent)) {
-        violations.push({
-          slotIds: window.map(w => w.slotId),
-          dates: window.map(w => formatDate(w.date)),
-          slotNames: window.map(w => w.slotName)
-        });
-      }
-    }
-
-    return { violationCount: violations.length, violations };
-  };
-
   // Memoize violations map for performance (recompute when users or slots change)
   const violationsMap = useMemo(() => {
+    const computeConsecutiveAbsenceViolationsForUser = (userId, slots) => {
+      if (!userId || !Array.isArray(slots) || slots.length === 0) {
+        return { violationCount: 0, violations: [] };
+      }
+  
+      const relevantSlots = slots
+        .slice()
+        .sort((a, b) => new Date(a.date) - new Date(b.date))
+        .filter(slot => {
+          if (!slot) return false;
+          const hasEligibleList = Array.isArray(slot.eligibleUserIds) && slot.eligibleUserIds.length > 0;
+          if (hasEligibleList) return slot.eligibleUserIds.includes(userId);
+          // legacy: include if attendance entry exists for user
+          return Array.isArray(slot.attendance) && slot.attendance.some(a => a.userId === userId);
+        });
+  
+      const statusArr = relevantSlots.map(slot => {
+        const rec = Array.isArray(slot.attendance) ? slot.attendance.find(a => a.userId === userId) : null;
+        const hasEligibleList = Array.isArray(slot.eligibleUserIds) && slot.eligibleUserIds.length > 0;
+        const isPresent = rec ? !!rec.isPresent : (hasEligibleList ? false : false);
+        return {
+          slotId: slot.id,
+          date: slot.date,
+          slotName: slot.slotName || '',
+          isPresent
+        };
+      });
+  
+      const violations = [];
+      for (let i = 0; i <= statusArr.length - 3; i++) {
+        const window = statusArr.slice(i, i + 3);
+        if (window.every(s => !s.isPresent)) {
+          violations.push({
+            slotIds: window.map(w => w.slotId),
+            dates: window.map(w => formatDate(w.date)),
+            slotNames: window.map(w => w.slotName)
+          });
+        }
+      }
+  
+      return { violationCount: violations.length, violations };
+    };
+  
     const map = {};
     if (!Array.isArray(allUsers) || !Array.isArray(attendanceSlots)) return map;
     allUsers.forEach(user => {
-      if (!user || user.status !== 'active') return; // only consider active members
+      if (!user || user.status !== 'active') return;
       map[user.id] = computeConsecutiveAbsenceViolationsForUser(user.id, attendanceSlots);
     });
     return map;
