@@ -965,6 +965,18 @@ const App = () => {
     return `${percentage.toFixed(1)}%`;
   };
 
+  // Render attendance percentage with conditional red font based on thresholds:
+  // - overall (type === 'all'): red if < 75%
+  // - per-type (event, coreteammeeting, domainmeeting): red if < 50%
+  const renderAttendanceWithColor = (userId, type) => {
+    const pctStr = getAttendancePercentage(userId, type);
+    const pctNum = parseFloat(pctStr) || 0;
+    const isOverall = type === 'all';
+    const threshold = isOverall ? 75 : 50;
+  const className = pctNum < threshold ? 'text-red-600' : '';
+    return <span className={className}>{pctStr}</span>;
+  };
+
   const calculateAverageAttendanceRate = () => {
     const activeUsers = allUsers.filter(user => user.status === 'active');
     if (activeUsers.length === 0 || attendanceSlots.length === 0) {
@@ -1513,10 +1525,10 @@ const App = () => {
                               <td className="px-6 py-4 whitespace-nowrap">{user.username}</td>
                               <td className="px-6 py-4 whitespace-nowrap">{user.domain}</td>
                               <td className="px-6 py-4 whitespace-nowrap">{user.position}</td>
-                              <td className="px-6 py-4 whitespace-nowrap">{getAttendancePercentage(user.id, 'all')}</td>
-                              <td className="px-6 py-4 whitespace-nowrap">{getAttendancePercentage(user.id, 'event')}</td>
-                              <td className="px-6 py-4 whitespace-nowrap">{getAttendancePercentage(user.id, 'coreteammeeting')}</td>
-                              <td className="px-6 py-4 whitespace-nowrap">{getAttendancePercentage(user.id, 'domainmeeting')}</td>
+                              <td className="px-6 py-4 whitespace-nowrap">{renderAttendanceWithColor(user.id, 'all')}</td>
+                              <td className="px-6 py-4 whitespace-nowrap">{renderAttendanceWithColor(user.id, 'event')}</td>
+                              <td className="px-6 py-4 whitespace-nowrap">{renderAttendanceWithColor(user.id, 'coreteammeeting')}</td>
+                              <td className="px-6 py-4 whitespace-nowrap">{renderAttendanceWithColor(user.id, 'domainmeeting')}</td>
                               <td className="px-6 py-4 whitespace-nowrap">
                                 {(() => {
                                   const v = violationsMap[user.id] || { violationCount: 0, violations: [] };

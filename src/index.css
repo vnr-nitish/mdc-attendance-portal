@@ -226,8 +226,16 @@ input:focus, select:focus, textarea:focus {
 
 /* Slot cards and table container */
 .slot-card {
-	@apply bg-white rounded-xl shadow-md p-4 mb-4;
+	background-color: #ffffff;
+	border-radius: 0.75rem;
+	box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+	padding: 1rem;
+	margin-bottom: 1rem;
 }
 .table-card {
-	@apply bg-white rounded-xl shadow-md p-4 overflow-x-auto;
+	background-color: #ffffff;
+	border-radius: 0.75rem;
+	box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1), 0 2px 4px -1px rgba(0,0,0,0.06);
+	padding: 1rem;
+	overflow-x: auto;
 }
