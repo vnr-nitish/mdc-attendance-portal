@@ -2,7 +2,7 @@
 
 ## Overview
 
-Attendance Portal is a focused React + Tailwind single-page application for club attendance management. It provides a members dashboard, a meeting scheduler, an intuitive attendance-marking UI, and consolidated attendance summaries so club organisers can quickly see participation trends and per-member activity. Deployed at: https://mdc-attendance-portal.vercel.app/
+Attendance Portal is a focused React + Tailwind single-page application for club attendance management. It provides a members dashboard, a meeting scheduler, an intuitive attendance-marking UI, and consolidated attendance summaries so club organisers can quickly see participation trends and per-member activity.
 
 ## Core Features
 
@@ -48,6 +48,7 @@ The app is deployed at: https://mdc-attendance-portal.vercel.app/
 
 ## Author
 
-Vinnakota Nitish Raj
-LinkedIn: https://www.linkedin.com/in/vnr-nitish/
+**Vinnakota Nitish Raj**
+
+LinkedIn: https://www.linkedin.com/in/vnr-nitish
 
