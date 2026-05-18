@@ -29,10 +29,10 @@ The app is deployed at: https://mdc-attendance-portal.vercel.app/
 
 ## Project Structure
 
-- `src/` — application source (components, styles)
-- `public/` — static assets and `index.html`
-- `build/` — production build artifacts (generated)
-- `package.json` — scripts and dependencies
+- `src/` - application source (components, styles)
+- `public/` - static assets and `index.html`
+- `build/` - production build artifacts (generated)
+- `package.json` - scripts and dependencies
 
 ## Workflows
 
