@@ -18,7 +18,7 @@ const App = () => {
 
   // State for UI navigation and Admin Panel view
   const [view, setView] = useState('login'); // 'login', 'register', 'userDashboard', 'adminDashboard'
-  const [adminView, setAdminView] = useState('dashboard'); // 'dashboard', 'manageUsers', 'attendanceSlots', 'tasks', 'certification'
+  const [adminView, setAdminView] = useState('dashboard'); // 'dashboard', 'manageUsers', 'attendanceSlots'
   const [showProfileDropdown, setShowProfileDropdown] = useState(false);
 
   // State for forms and messages
@@ -61,162 +61,6 @@ const App = () => {
   const [showImportModal, setShowImportModal] = useState(false);
   const [importFile, setImportFile] = useState(null);
 
-  // Tasks feature state
-  const [tasks, setTasks] = useState([]);
-  const [showCreateTask, setShowCreateTask] = useState(false);
-  const [newTaskForm, setNewTaskForm] = useState({ type: 'Event', title: '', description: '', dueDate: '', assignedUserIds: [], checklist: [] });
-  const [editingTask, setEditingTask] = useState(null);
-  const [deletingTask, setDeletingTask] = useState(null);
-  const [showTaskDetails, setShowTaskDetails] = useState(false);
-  const [selectedTaskForModal, setSelectedTaskForModal] = useState(null);
-
-  const defaultEventChecklist = [
-    'Event Proposal',
-    'Event Report',
-    'Statement of Contribution',
-    'Photos Uploading',
-    'Best Photos',
-    'Instagram Caption',
-    'WhatsApp Content',
-    'LinkedIn Content',
-    'Email Content'
-  ];
-
-  const buildChecklistForType = (type, custom = []) => {
-    if (!type) return [];
-    const normalized = type.toLowerCase();
-    if (normalized === 'event' || normalized === 'events') {
-      return defaultEventChecklist.map((label, idx) => ({ id: `item-${idx}-${label.replace(/\s+/g,'')}`, label, doneBy: [] }));
-    }
-    return (custom && custom.length > 0) ? custom.map((label, idx) => ({ id: `item-${idx}-${label.replace(/\s+/g,'')}`, label, doneBy: [] })) : [];
-  };
-
-  const handleToggleAssignUser = (userId) => {
-    setNewTaskForm(prev => {
-      const assigned = prev.assignedUserIds || [];
-      return { ...prev, assignedUserIds: assigned.includes(userId) ? assigned.filter(id => id !== userId) : [...assigned, userId] };
-    });
-  };
-
-  const handleCreateTask = async (e) => {
-    e && e.preventDefault && e.preventDefault();
-    if (!db || !isAdmin) return;
-    if (!newTaskForm.title || !newTaskForm.dueDate) {
-      setModalMessage('Please provide a title and due date for the task.');
-      return;
-    }
-    try {
-      const checklist = (newTaskForm.checklist && newTaskForm.checklist.length > 0) ? newTaskForm.checklist : buildChecklistForType(newTaskForm.type);
-      const taskDoc = {
-        type: newTaskForm.type,
-        title: newTaskForm.title,
-        description: newTaskForm.description || '',
-        dueDate: newTaskForm.dueDate,
-        checklist,
-        assignedUserIds: newTaskForm.assignedUserIds || [],
-        createdAt: serverTimestamp(),
-      };
-      const tasksCollectionPath = `/artifacts/${appId}/public/data/tasks`;
-      await addDoc(collection(db, tasksCollectionPath), taskDoc);
-      setModalMessage('Task created successfully.');
-      setShowCreateTask(false);
-      setNewTaskForm({ type: 'Event', title: '', description: '', dueDate: '', assignedUserIds: [], checklist: [] });
-      setTimeout(() => setModalMessage(''), 1000);
-    } catch (err) {
-      console.error('Error creating task:', err);
-      setModalMessage('Failed to create task. Please try again.');
-    }
-  };
-
-  const handleSaveTaskEdit = async () => {
-    if (!db || !isAdmin || !editingTask) return;
-    try {
-      const taskDocRef = doc(db, `/artifacts/${appId}/public/data/tasks`, editingTask.id);
-      const updated = {
-        type: newTaskForm.type,
-        title: newTaskForm.title,
-        description: newTaskForm.description || '',
-        dueDate: newTaskForm.dueDate,
-        checklist: newTaskForm.checklist || buildChecklistForType(newTaskForm.type),
-        assignedUserIds: newTaskForm.assignedUserIds || []
-      };
-      await updateDoc(taskDocRef, updated);
-      setModalMessage('Task updated successfully.');
-      setEditingTask(null);
-      setShowCreateTask(false);
-      setTimeout(() => setModalMessage(''), 1000);
-    } catch (err) {
-      console.error('Error saving task edit:', err);
-      setModalMessage('Failed to save task changes.');
-    }
-  };
-
-  const handleDeleteTask = (task) => {
-    setDeletingTask(task);
-    setModalMessage('');
-  };
-
-  const confirmDeleteTask = async () => {
-    if (!db || !isAdmin || !deletingTask) return;
-    try {
-      const taskDocRef = doc(db, `/artifacts/${appId}/public/data/tasks`, deletingTask.id);
-      await deleteDoc(taskDocRef);
-      setModalMessage('Task deleted successfully.');
-      setDeletingTask(null);
-      setTimeout(() => setModalMessage(''), 1000);
-    } catch (err) {
-      console.error('Error deleting task:', err);
-      setModalMessage('Failed to delete task.');
-      setDeletingTask(null);
-    }
-  };
-
-  const handleToggleChecklistItem = async (task, itemId) => {
-    if (!db || !userProfile) return;
-    try {
-      const taskDocRef = doc(db, `/artifacts/${appId}/public/data/tasks`, task.id);
-      const updatedChecklist = (task.checklist || []).map(item => {
-        if (item.id !== itemId) return item;
-        const existing = Array.isArray(item.doneBy) ? item.doneBy.slice() : [];
-        const idx = existing.findIndex(d => d.userId === userProfile.id);
-        if (idx === -1) {
-          existing.push({ userId: userProfile.id, ts: new Date().toISOString() });
-        } else {
-          existing.splice(idx, 1);
-        }
-        return { ...item, doneBy: existing };
-      });
-      await updateDoc(taskDocRef, { checklist: updatedChecklist });
-    } catch (err) {
-      console.error('Error updating checklist:', err);
-      setModalMessage('Failed to update checklist item.');
-    }
-  };
-
-  const isTaskCompletedByUser = (task, userId) => {
-    if (!task || !Array.isArray(task.checklist) || task.checklist.length === 0) return false;
-    return task.checklist.every(item => Array.isArray(item.doneBy) && item.doneBy.some(d => d.userId === userId));
-  };
-
-  const countTasksCompletedBeforeDue = (userId) => {
-    if (!userId || !Array.isArray(tasks)) return 0;
-    let cnt = 0;
-    tasks.forEach(task => {
-      if (!task.assignedUserIds || !task.assignedUserIds.includes(userId)) return;
-      if (!isTaskCompletedByUser(task, userId)) return;
-      // find latest timestamp among checklist entries for this user
-      const times = (task.checklist || []).map(item => {
-        const found = (item.doneBy || []).find(d => d.userId === userId);
-        return found ? new Date(found.ts) : null;
-      }).filter(Boolean);
-      if (times.length === 0) return;
-      const latest = new Date(Math.max(...times.map(t => t.getTime())));
-      const dueEnd = new Date(`${task.dueDate}T23:59:59`);
-      if (latest <= dueEnd) cnt += 1;
-    });
-    return cnt;
-  };
-
   // State for Dashboard
   const [showMemberAttendanceDetails, setShowMemberAttendanceDetails] = useState(false);
   const [selectedMember, setSelectedMember] = useState(null);
@@ -227,8 +71,6 @@ const App = () => {
   const [dashboardFilterDomain, setDashboardFilterDomain] = useState('all');
   const [dashboardFilterPosition, setDashboardFilterPosition] = useState('all');
   const [dashboardFilterAttendance, setDashboardFilterAttendance] = useState('all');
-  const [certificationFilterDomain, setCertificationFilterDomain] = useState('all');
-  const [certificationFilterPosition, setCertificationFilterPosition] = useState('all');
 
   // User Dashboard State
   const [showEditProfileModal, setShowEditProfileModal] = useState(false);
@@ -334,16 +176,9 @@ const App = () => {
       setAttendanceSlots(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     }, (error) => console.error("Error fetching slots:", error));
 
-    // Tasks collection
-    const tasksCollectionPath = `/artifacts/${appId}/public/data/tasks`;
-    const unsubTasks = onSnapshot(collection(db, tasksCollectionPath), (snapshot) => {
-      setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    }, (error) => console.error("Error fetching tasks:", error));
-
     return () => {
       unsubUsers();
       unsubSlots();
-      if (typeof unsubTasks === 'function') unsubTasks();
     };
   }, [isAuthReady, db, isAdmin, userProfile, appId]);
 
@@ -765,12 +600,6 @@ const App = () => {
     return matchesSearch && matchesStatus && matchesDomain && matchesYear && matchesPosition;
   }).sort(userSort);
 
-  const certificationUsers = allUsers.filter(user =>
-    user.status === 'active' &&
-    (certificationFilterDomain === 'all' || user.domain === certificationFilterDomain) &&
-    (certificationFilterPosition === 'all' || user.position === certificationFilterPosition)
-  ).sort(userSort);
-  
   const downloadUsersCSV = () => {
     const header = ['Full Name', 'Email', 'Contact', 'Year', 'Reg No', 'Program', 'Domain', 'Position', 'Status'];
     const rows = filteredUsers.map(user => 
@@ -1148,39 +977,6 @@ const App = () => {
     return <span className={className}>{pctStr}</span>;
   };
 
-  const getEligibleSlotsForUser = (userId) => {
-    return attendanceSlots.filter(slot => {
-      if (!slot) return false;
-      const hasEligibleList = Array.isArray(slot.eligibleUserIds) && slot.eligibleUserIds.length > 0;
-      if (hasEligibleList) return slot.eligibleUserIds.includes(userId);
-      return Array.isArray(slot.attendance) && slot.attendance.some(a => a.userId === userId);
-    });
-  };
-
-  const getAttendedEligibleSlotsForUser = (userId) => {
-    const eligibleSlots = getEligibleSlotsForUser(userId);
-    return eligibleSlots.filter(slot =>
-      Array.isArray(slot.attendance) && slot.attendance.some(a => a.userId === userId && a.isPresent)
-    ).length;
-  };
-
-  const getRequiredSlotsCount = (eligibleCount, pct) => {
-    if (!eligibleCount || eligibleCount <= 0) return 0;
-    return Math.ceil(eligibleCount * pct);
-  };
-
-  const getCertificationStatsForUser = (userId) => {
-    const eligibleSlots = getEligibleSlotsForUser(userId);
-    const eligibleCount = eligibleSlots.length;
-    const attendedCount = getAttendedEligibleSlotsForUser(userId);
-    return {
-      eligibleCount,
-      attendedCount,
-      required75: getRequiredSlotsCount(eligibleCount, 0.75),
-      required70: getRequiredSlotsCount(eligibleCount, 0.7)
-    };
-  };
-
   const calculateAverageAttendanceRate = () => {
     const activeUsers = allUsers.filter(user => user.status === 'active');
     if (activeUsers.length === 0 || attendanceSlots.length === 0) {
@@ -1231,51 +1027,6 @@ const App = () => {
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
     link.setAttribute('download', 'attendance_report.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  const downloadCSP = () => {
-    const filteredActiveUsers = allUsers.filter(user =>
-      user.status === 'active' &&
-      (certificationFilterDomain === 'all' || user.domain === certificationFilterDomain) &&
-      (certificationFilterPosition === 'all' || user.position === certificationFilterPosition)
-    ).sort(userSort);
-
-    if (filteredActiveUsers.length === 0) {
-      setMessage('No users match the current certification filters.');
-      return;
-    }
-
-    const header = [
-      'Full Name',
-      'Domain',
-      'Position',
-      'Eligible Slots',
-      'Required Slots (75%)',
-      'Required Slots (70%)',
-      'Attended Slots'
-    ];
-
-    const rows = filteredActiveUsers.map(user => {
-      const stats = getCertificationStatsForUser(user.id);
-      return [
-        user.username,
-        user.domain,
-        user.position,
-        stats.eligibleCount,
-        stats.required75,
-        stats.required70,
-        stats.attendedCount
-      ].map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',');
-    });
-
-    const csvContent = [header.join(','), ...rows].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.setAttribute('download', 'certification_report.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1551,12 +1302,6 @@ const App = () => {
               <button onClick={() => { setAdminView('attendanceSlots'); setMarkingAttendanceForSlot(null); setShowProfileDropdown(false); }} className={`px-4 py-2 rounded-full font-medium ${adminView === 'attendanceSlots' ? 'bg-[#1e5a4f] text-white shadow-md' : 'text-gray-200 hover:text-white'}`}>
                 Attendance Slots
               </button>
-              <button onClick={() => { setAdminView('tasks'); setMarkingAttendanceForSlot(null); setShowProfileDropdown(false); }} className={`px-4 py-2 rounded-full font-medium ${adminView === 'tasks' ? 'bg-[#1e5a4f] text-white shadow-md' : 'text-gray-200 hover:text-white'}`}>
-                Tasks
-              </button>
-              <button onClick={() => { setAdminView('certification'); setMarkingAttendanceForSlot(null); setShowProfileDropdown(false); }} className={`px-4 py-2 rounded-full font-medium ${adminView === 'certification' ? 'bg-[#1e5a4f] text-white shadow-md' : 'text-gray-200 hover:text-white'}`}>
-                Certification
-              </button>
             </div>
           ) : null}
           {(isAdmin || userProfile) && (
@@ -1806,57 +1551,6 @@ const App = () => {
                       </tbody>
                     </table>
                   </div>
-                  {/* My Tasks for the logged-in user */}
-                  <h3 className="text-xl font-semibold text-gray-800 mt-8">My Tasks</h3>
-                  <div className="mt-2">
-                    {userProfile ? (
-                      (() => {
-                        const myTasks = tasks.filter(t => Array.isArray(t.assignedUserIds) && t.assignedUserIds.includes(userProfile.id));
-                        const completedBefore = countTasksCompletedBeforeDue(userProfile.id);
-                        return (
-                          <div>
-                            <div className="flex items-center space-x-4 mb-4">
-                              <div className="text-sm">Assigned Tasks: <strong>{myTasks.length}</strong></div>
-                              <div className="text-sm">Completed before due date: <strong>{completedBefore}</strong></div>
-                            </div>
-                            {myTasks.length > 0 ? (
-                              <div className="overflow-x-auto">
-                                <table className="min-w-full divide-y divide-gray-200">
-                                  <thead className="bg-gray-50">
-                                    <tr>
-                                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
-                                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due Date</th>
-                                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Progress</th>
-                                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="bg-white divide-y divide-gray-200">
-                                    {myTasks.map(task => {
-                                      const total = Array.isArray(task.checklist) ? task.checklist.length : 0;
-                                      const doneByUser = total === 0 ? 0 : task.checklist.filter(it => Array.isArray(it.doneBy) && it.doneBy.some(d => d.userId === userProfile.id)).length;
-                                      const pct = total === 0 ? 0 : Math.round((doneByUser / total) * 100);
-                                      return (
-                                        <tr key={task.id}>
-                                          <td className="px-6 py-4 whitespace-nowrap">{task.title}</td>
-                                          <td className="px-6 py-4 whitespace-nowrap">{formatDate(task.dueDate)}</td>
-                                          <td className="px-6 py-4 whitespace-nowrap">{pct}%</td>
-                                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium"><button onClick={() => { setSelectedTaskForModal(task); setShowTaskDetails(true); }} className="text-indigo-600 hover:text-indigo-900">View</button></td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : (
-                              <p className="text-sm text-gray-500">You have no assigned tasks.</p>
-                            )}
-                          </div>
-                        );
-                      })()
-                    ) : (
-                      <p className="text-sm text-gray-500">Login to see your tasks.</p>
-                    )}
-                  </div>
                 </>
               )}
               {adminView === 'manageUsers' && (
@@ -2001,210 +1695,6 @@ const App = () => {
                     <p className="text-center text-gray-500">No users found.</p>
                   )}
                 </>
-              )}
-              {adminView === 'tasks' && (
-                <>
-                  <div className="flex justify-between items-center mt-6">
-                    <div className="flex space-x-4">
-                      <button onClick={() => { setModalMessage(''); setShowCreateTask(true); setNewTaskForm({ type: 'Event', title: '', description: '', dueDate: '', assignedUserIds: [], checklist: [] }); }} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-full shadow-lg transition-colors">
-                        Create Task
-                      </button>
-                    </div>
-                  </div>
-
-                  <h3 className="text-xl font-semibold text-gray-800 mt-6">All Tasks</h3>
-                  {tasks && tasks.length > 0 ? (
-                    <div className="overflow-x-auto">
-                      <table className="min-w-full divide-y divide-gray-200">
-                        <thead className="bg-gray-50">
-                          <tr>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Due Date</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assigned</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Progress</th>
-                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="bg-white divide-y divide-gray-200">
-                          {tasks.slice().sort((a,b) => new Date(a.dueDate) - new Date(b.dueDate)).map(task => {
-                            const totalItems = Array.isArray(task.checklist) ? task.checklist.length : 0;
-                            const completedItems = totalItems === 0 ? 0 : task.checklist.filter(it => Array.isArray(it.doneBy) && it.doneBy.length > 0).length;
-                            const progress = totalItems === 0 ? 0 : Math.round((completedItems / totalItems) * 100);
-                            return (
-                              <tr key={task.id}>
-                                <td className="px-6 py-4 whitespace-nowrap">{task.title}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{task.type}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{formatDate(task.dueDate)}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{(task.assignedUserIds || []).length}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{progress}%</td>
-                                <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                                  <div className="flex space-x-4 justify-end">
-                                    <button onClick={() => { setEditingTask(task); setShowCreateTask(true); setNewTaskForm({ type: task.type, title: task.title, description: task.description || '', dueDate: task.dueDate, assignedUserIds: task.assignedUserIds || [], checklist: task.checklist || [] }); }} className="text-indigo-600 hover:text-indigo-900 font-semibold">Edit</button>
-                                    <button onClick={() => handleDeleteTask(task)} className="text-red-600 hover:text-red-900 font-semibold">Delete</button>
-                                    <button onClick={() => { setModalMessage(''); setSelectedTaskForModal(task); setShowTaskDetails(true); }} className="text-gray-600 hover:text-gray-900 font-semibold">View</button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <p className="text-center text-gray-500 mt-6">No tasks found.</p>
-                  )}
-
-                  {/* Create/Edit Task Modal */}
-                  {showCreateTask && (
-                    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black bg-opacity-40">
-                      <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6">
-                        <h3 className="text-lg font-semibold mb-4">{editingTask ? 'Edit Task' : 'Create Task'}</h3>
-                        <form onSubmit={(e) => { e.preventDefault(); if (editingTask) { handleSaveTaskEdit(); } else { handleCreateTask(); } }} className="space-y-4">
-                          <div>
-                            <label className="block text-sm font-medium">Type</label>
-                            <select value={newTaskForm.type} onChange={(e) => { const t = e.target.value; setNewTaskForm(prev => ({ ...prev, type: t, checklist: buildChecklistForType(t) })); }} className="w-full p-2 rounded-lg bg-gray-100 border border-gray-300">
-                              <option>Event</option>
-                              <option>Minutes</option>
-                              <option>Instagram</option>
-                              <option>Project</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium">Title</label>
-                            <input value={newTaskForm.title} onChange={(e) => setNewTaskForm(prev => ({ ...prev, title: e.target.value }))} className="w-full p-2 rounded-lg bg-gray-100 border border-gray-300" />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium">Description</label>
-                            <textarea value={newTaskForm.description} onChange={(e) => setNewTaskForm(prev => ({ ...prev, description: e.target.value }))} className="w-full p-2 rounded-lg bg-gray-100 border border-gray-300" />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium">Due Date</label>
-                            <input type="date" value={newTaskForm.dueDate} onChange={(e) => setNewTaskForm(prev => ({ ...prev, dueDate: e.target.value }))} className="w-full p-2 rounded-lg bg-gray-100 border border-gray-300" />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium">Assign Users</label>
-                            <div className="max-h-40 overflow-auto border border-gray-200 rounded p-2">
-                              {allUsers.filter(u => u.status === 'active').map(u => (
-                                <label key={u.id} className="flex items-center space-x-2 py-1">
-                                  <input type="checkbox" checked={(newTaskForm.assignedUserIds || []).includes(u.id)} onChange={() => handleToggleAssignUser(u.id)} />
-                                  <span className="text-sm">{u.username} ({u.domain})</span>
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                          <div className="flex justify-end space-x-2">
-                            <button type="button" onClick={() => { setShowCreateTask(false); setEditingTask(null); }} className="py-2 px-4 bg-gray-200 rounded">Cancel</button>
-                            <button type="submit" className="py-2 px-4 bg-indigo-600 text-white rounded">{editingTask ? 'Save' : 'Create'}</button>
-                          </div>
-                        </form>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Task Details Modal handled below via showTaskDetails */}
-                </>
-              )}
-              {adminView === 'certification' && (
-                <>
-                  <h3 className="text-xl font-semibold text-gray-800 mt-6">Certification Overview</h3>
-                  <div className="flex flex-wrap items-center space-y-4 sm:space-y-0 sm:space-x-4">
-                    <select
-                      value={certificationFilterDomain}
-                      onChange={(e) => setCertificationFilterDomain(e.target.value)}
-                      className="w-full sm:w-auto p-3 rounded-lg bg-gray-100 border border-gray-300"
-                    >
-                      <option value="all">All Domains</option>
-                      {domains.map(d => <option key={d} value={d}>{d}</option>)}
-                    </select>
-                    <select
-                      value={certificationFilterPosition}
-                      onChange={(e) => setCertificationFilterPosition(e.target.value)}
-                      className="w-full sm:w-auto p-3 rounded-lg bg-gray-100 border border-gray-300"
-                    >
-                      <option value="all">All Positions</option>
-                      {positions.map(p => <option key={p} value={p}>{p}</option>)}
-                    </select>
-                    <button onClick={downloadCSP} className="w-full sm:w-auto py-2 px-6 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-full shadow-lg transition-colors">
-                      Download CSP
-                    </button>
-                  </div>
-
-                  <div className="overflow-x-auto mt-4">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Full Name</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Domain</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Position</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Eligible Slots</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Required (75%)</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Required (70%)</th>
-                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Attended</th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {certificationUsers.length > 0 ? (
-                          certificationUsers.map(user => {
-                            const stats = getCertificationStatsForUser(user.id);
-                            return (
-                              <tr key={user.id}>
-                                <td className="px-6 py-4 whitespace-nowrap">{user.username}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{user.domain}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{user.position}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{stats.eligibleCount}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{stats.required75}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{stats.required70}</td>
-                                <td className="px-6 py-4 whitespace-nowrap">{stats.attendedCount}</td>
-                              </tr>
-                            );
-                          })
-                        ) : (
-                          <tr>
-                            <td colSpan="7" className="px-6 py-4 text-center text-gray-500">
-                              No members found for the selected filters.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-              {/* Task Details Modal */}
-              {showTaskDetails && selectedTaskForModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
-                  <div className="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6">
-                    <div className="flex justify-between items-center">
-                      <h3 className="text-lg font-semibold">{selectedTaskForModal.title}</h3>
-                      <button onClick={() => { setShowTaskDetails(false); setSelectedTaskForModal(null); }} className="text-gray-600">Close</button>
-                    </div>
-                    <p className="text-sm text-gray-600 mt-2">Type: {selectedTaskForModal.type} • Due: {formatDate(selectedTaskForModal.dueDate)}</p>
-                    <p className="mt-3 text-sm text-gray-700">{selectedTaskForModal.description}</p>
-                    <h4 className="mt-4 font-medium">Checklist</h4>
-                    <div className="mt-2 space-y-2">
-                      {(selectedTaskForModal.checklist || []).map(item => (
-                        <div key={item.id} className="flex items-center justify-between border rounded p-2">
-                          <div>
-                            <div className="font-medium">{item.label}</div>
-                            <div className="text-xs text-gray-500">Completed by: {(item.doneBy || []).map(d => {
-                              const u = allUsers.find(uu => uu.id === d.userId);
-                              return u ? u.username : d.userId;
-                            }).join(', ') || '—'}</div>
-                          </div>
-                          <div>
-                            {userProfile && (selectedTaskForModal.assignedUserIds || []).includes(userProfile.id) ? (
-                              <button onClick={() => handleToggleChecklistItem(selectedTaskForModal, item.id)} className="py-1 px-3 bg-green-600 text-white rounded">Toggle</button>
-                            ) : null}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex justify-end mt-4">
-                      <button onClick={() => { setShowTaskDetails(false); setSelectedTaskForModal(null); }} className="py-2 px-4 bg-gray-200 rounded">Close</button>
-                    </div>
-                  </div>
-                </div>
               )}
               {adminView === 'attendanceSlots' && (
                 <>
@@ -2772,19 +2262,6 @@ const App = () => {
         </div>
       )}
 
-      {deletingTask && (
-        <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-sm text-center">
-            <h3 className="text-xl font-bold mb-4">Confirm Deletion</h3>
-            <p className="mb-4">Are you sure you want to delete the task "{deletingTask.title}"? This action cannot be undone.</p>
-            <div className="flex justify-center space-x-4">
-              <button onClick={() => setDeletingTask(null)} className="py-2 px-4 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded-full transition-colors">Cancel</button>
-              <button onClick={confirmDeleteTask} className="py-2 px-4 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-full shadow-lg transition-colors">Delete</button>
-            </div>
-          </div>
-        </div>
-      )}
-      
       {showMemberAttendanceDetails && selectedMember && (
         <div className="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-3xl max-h-screen overflow-y-auto space-y-4">
