@@ -829,15 +829,88 @@ const App = () => {
     );
 
     const csvContent = [header.join(','), ...rows].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    link.setAttribute('href', url);
     const fileName = `attendance_${markingAttendanceForSlot.slotName.replace(/ /g, '_')}_${markingAttendanceForSlot.date}.csv`;
-    link.setAttribute('download', fileName);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    downloadCsvFile(csvContent, fileName);
+  };
+
+  const handleDownloadAllAttendance = () => {
+    const activeUsers = allUsers.filter(user => user.status === 'active');
+
+    if (activeUsers.length === 0 || attendanceSlots.length === 0) {
+      setMessage('No attendance data available to export.');
+      return;
+    }
+
+    const rowsData = [];
+
+    attendanceSlots
+      .slice()
+      .sort((a, b) => parseDateForSort(a.date) - parseDateForSort(b.date))
+      .forEach(slot => {
+        const eligibleIds = Array.isArray(slot.eligibleUserIds) ? slot.eligibleUserIds : [];
+        const hasEligibleList = eligibleIds.length > 0;
+
+        activeUsers.forEach(user => {
+          const attendanceRecord = Array.isArray(slot.attendance)
+            ? slot.attendance.find(a => a.userId === user.id)
+            : null;
+          const isEligible = !hasEligibleList || eligibleIds.includes(user.id);
+
+          rowsData.push({
+            date: slot.date,
+            slotName: slot.slotName || '',
+            slotType: slotTypesMap[normalizeSlotType(slot.slotType)] || slot.slotType || '',
+            timings: slot.timings || '',
+            fullName: user.username || '',
+            email: user.email || '',
+            domain: user.domain || '',
+            position: user.position || '',
+            eligibility: isEligible ? 'Eligible' : 'Not Eligible',
+            status: !isEligible
+              ? 'Not Eligible'
+              : attendanceRecord
+                ? (attendanceRecord.isPresent ? 'Present' : 'Absent')
+                : 'Absent'
+          });
+        });
+      });
+
+    const header = [
+      'Date',
+      'Slot Name',
+      'Slot Type',
+      'Timings',
+      'Full Name',
+      'Email',
+      'Domain',
+      'Position',
+      'Eligibility',
+      'Status'
+    ];
+
+    const rows = rowsData
+      .sort((a, b) => {
+        const dateDiff = parseDateForSort(a.date) - parseDateForSort(b.date);
+        if (dateDiff !== 0) return dateDiff;
+        const nameDiff = (a.fullName || '').localeCompare(b.fullName || '');
+        if (nameDiff !== 0) return nameDiff;
+        return (a.slotName || '').localeCompare(b.slotName || '');
+      })
+      .map(row => [
+        row.date ? formatDate(row.date) : '',
+        row.slotName,
+        row.slotType,
+        row.timings,
+        row.fullName,
+        row.email,
+        row.domain,
+        row.position,
+        row.eligibility,
+        row.status
+      ].map(escapeCsvCell).join(','));
+
+    const csvContent = [header.map(escapeCsvCell).join(','), ...rows].join('\n');
+    downloadCsvFile(csvContent, 'all_attendance_records.csv');
   };
 
   const handleDownloadTemplate = () => {
@@ -1227,6 +1300,25 @@ const App = () => {
     const mm = String(dt.getMonth() + 1).padStart(2, '0');
     const yyyy = dt.getFullYear();
     return `${dd}-${mm}-${yyyy}`;
+  };
+
+  const parseDateForSort = (dateStr) => {
+    if (!dateStr) return new Date(0);
+    const parsed = new Date(dateStr);
+    return isNaN(parsed) ? new Date(0) : parsed;
+  };
+
+  const escapeCsvCell = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+
+  const downloadCsvFile = (csvContent, fileName) => {
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // Memoize violations map for performance (recompute when users or slots change)
@@ -1833,6 +1925,9 @@ const App = () => {
                     <div className="flex space-x-4">
                       <button onClick={() => { setModalMessage(''); const activeUsers = allUsers.filter(u => u.status === 'active').map(u => u.id); setEligibleUsers(activeUsers); setEligibleUserSearch(''); setShowCreateSlot(true); }} className="py-2 px-6 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-full shadow-lg transition-colors">
                         Create Slot
+                      </button>
+                      <button onClick={handleDownloadAllAttendance} className="py-2 px-6 bg-teal-600 hover:bg-teal-700 text-white font-semibold rounded-full shadow-lg transition-colors">
+                        Download All Attendance CSV
                       </button>
                       <select
                         value={slotTypeFilter}
