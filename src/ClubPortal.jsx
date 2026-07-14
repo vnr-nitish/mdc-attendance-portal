@@ -841,73 +841,54 @@ const App = () => {
       return;
     }
 
-    const rowsData = [];
-
-    attendanceSlots
+    const sortedSlots = attendanceSlots
       .slice()
-      .sort((a, b) => parseDateForSort(a.date) - parseDateForSort(b.date))
-      .forEach(slot => {
-        const eligibleIds = Array.isArray(slot.eligibleUserIds) ? slot.eligibleUserIds : [];
-        const hasEligibleList = eligibleIds.length > 0;
-
-        activeUsers.forEach(user => {
-          const attendanceRecord = Array.isArray(slot.attendance)
-            ? slot.attendance.find(a => a.userId === user.id)
-            : null;
-          const isEligible = !hasEligibleList || eligibleIds.includes(user.id);
-
-          rowsData.push({
-            date: slot.date,
-            slotName: slot.slotName || '',
-            slotType: slotTypesMap[normalizeSlotType(slot.slotType)] || slot.slotType || '',
-            timings: slot.timings || '',
-            fullName: user.username || '',
-            email: user.email || '',
-            domain: user.domain || '',
-            position: user.position || '',
-            eligibility: isEligible ? 'Eligible' : 'Not Eligible',
-            status: !isEligible
-              ? 'Not Eligible'
-              : attendanceRecord
-                ? (attendanceRecord.isPresent ? 'Present' : 'Absent')
-                : 'Absent'
-          });
-        });
-      });
-
-    const header = [
-      'Date',
-      'Slot Name',
-      'Slot Type',
-      'Timings',
-      'Full Name',
-      'Email',
-      'Domain',
-      'Position',
-      'Eligibility',
-      'Status'
-    ];
-
-    const rows = rowsData
       .sort((a, b) => {
         const dateDiff = parseDateForSort(a.date) - parseDateForSort(b.date);
         if (dateDiff !== 0) return dateDiff;
-        const nameDiff = (a.fullName || '').localeCompare(b.fullName || '');
-        if (nameDiff !== 0) return nameDiff;
         return (a.slotName || '').localeCompare(b.slotName || '');
-      })
-      .map(row => [
-        row.date ? formatDate(row.date) : '',
-        row.slotName,
-        row.slotType,
-        row.timings,
-        row.fullName,
-        row.email,
-        row.domain,
-        row.position,
-        row.eligibility,
-        row.status
-      ].map(escapeCsvCell).join(','));
+      });
+
+    const slotHeaders = sortedSlots.map(slot => {
+      const slotLabel = slot.slotName ? ` | ${slot.slotName}` : '';
+      return `${formatDate(slot.date)}${slotLabel}`;
+    });
+
+    const header = [
+      'Full Name',
+      'Email',
+      'Registration Number',
+      'Position',
+      'Domain',
+      ...slotHeaders
+    ];
+
+    const rows = activeUsers
+      .slice()
+      .sort(userSort)
+      .map(user => {
+        const slotCells = sortedSlots.map(slot => {
+          const eligibleIds = Array.isArray(slot.eligibleUserIds) ? slot.eligibleUserIds : [];
+          const hasEligibleList = eligibleIds.length > 0;
+          const isEligible = !hasEligibleList || eligibleIds.includes(user.id);
+          if (!isEligible) return 'Not Eligible';
+
+          const attendanceRecord = Array.isArray(slot.attendance)
+            ? slot.attendance.find(a => a.userId === user.id)
+            : null;
+
+          return attendanceRecord && attendanceRecord.isPresent ? 'Present' : 'Absent';
+        });
+
+        return [
+          user.username || '',
+          user.email || '',
+          user.regNo || '',
+          user.position || '',
+          user.domain || '',
+          ...slotCells
+        ].map(escapeCsvCell).join(',');
+      });
 
     const csvContent = [header.map(escapeCsvCell).join(','), ...rows].join('\n');
     downloadCsvFile(csvContent, 'all_attendance_records.csv');
